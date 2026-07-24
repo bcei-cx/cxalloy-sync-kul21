@@ -33,10 +33,76 @@ CXALLOY_PROJECT_IDS = [
 CXALLOY_BASE_URL = "https://tq.cxalloy.com/api/v1"
 OUTPUT_PATH = "data/equipment_status.csv"
 
-FIELDS = [
-    "project_id", "equipment_id", "name", "type", "discipline",
-    "building", "floor", "space", "status", "extended_status", "last_synced",
+# The tag/commissioning stages returned inside extended_status, in workflow order.
+# Each stage has a "<stage>_date" and "<stage>_person" field.
+TAG_STAGES = [
+    "no_tag",
+    "l1_red_tag",
+    "conditional_yellow_tag",
+    "l2_yellow_tag",
+    "energized",
+    "l3_green_tag",
+    "l4_blue_tag",
+    "l5_white_tag",
 ]
+
+TAG_STAGE_LABELS = {
+    "no_tag": "No Tag",
+    "l1_red_tag": "L1 Red Tag",
+    "conditional_yellow_tag": "Conditional Yellow Tag",
+    "l2_yellow_tag": "L2 Yellow Tag",
+    "energized": "Energized",
+    "l3_green_tag": "L3 Green Tag",
+    "l4_blue_tag": "L4 Blue Tag",
+    "l5_white_tag": "L5 White Tag",
+}
+
+EXTENDED_STATUS_FIELDS = []
+for _stage in TAG_STAGES:
+    EXTENDED_STATUS_FIELDS.append(f"{_stage}_date")
+    EXTENDED_STATUS_FIELDS.append(f"{_stage}_person")
+
+FIELDS = (
+    ["project_id", "equipment_id", "name", "type", "discipline",
+     "building", "floor", "space", "status"]
+    + EXTENDED_STATUS_FIELDS
+    + ["current_stage", "current_stage_date", "current_stage_person", "last_synced"]
+)
+
+
+def flatten_extended_status(extended_status) -> dict:
+    """
+    Turns the extended_status object (a dict of tag stages -> date/person)
+    into flat columns, plus a derived "current_stage" = the furthest stage
+    reached so far (the last one in TAG_STAGES order that has a non-empty date).
+
+    Handles extended_status being missing, empty, or unexpectedly a plain
+    string (falls back gracefully instead of crashing the whole sync).
+    """
+    flat = {f: "" for f in EXTENDED_STATUS_FIELDS}
+    current_stage = ""
+    current_stage_date = ""
+    current_stage_person = ""
+
+    if isinstance(extended_status, dict):
+        for stage in TAG_STAGES:
+            date_val = extended_status.get(f"{stage}_date", "") or ""
+            person_val = extended_status.get(f"{stage}_person", "") or ""
+            flat[f"{stage}_date"] = date_val
+            flat[f"{stage}_person"] = person_val
+            # Multiple dates can appear newline-separated (repeat tagging);
+            # take the most recent one for the "current stage" summary.
+            if date_val.strip():
+                current_stage = TAG_STAGE_LABELS[stage]
+                current_stage_date = date_val.strip().split("\n")[-1]
+                current_stage_person = person_val.strip().split("\n")[-1]
+
+    return {
+        **flat,
+        "current_stage": current_stage,
+        "current_stage_date": current_stage_date,
+        "current_stage_person": current_stage_person,
+    }
 
 
 def cxalloy_headers() -> dict:
@@ -111,7 +177,7 @@ def main():
         writer = csv.DictWriter(f, fieldnames=FIELDS)
         writer.writeheader()
         for eq in all_equipment:
-            writer.writerow({
+            row = {
                 "project_id": eq.get("project_id", eq.get("_project_id", "")),
                 "equipment_id": eq.get("equipment_id", ""),
                 "name": eq.get("name", ""),
@@ -121,9 +187,10 @@ def main():
                 "floor": eq.get("floor", ""),
                 "space": eq.get("space", ""),
                 "status": eq.get("status", ""),
-                "extended_status": eq.get("extended_status", ""),
                 "last_synced": now,
-            })
+            }
+            row.update(flatten_extended_status(eq.get("extended_status")))
+            writer.writerow(row)
 
     print(f"Wrote {len(all_equipment)} rows to {OUTPUT_PATH}")
 
