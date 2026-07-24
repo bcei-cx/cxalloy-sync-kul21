@@ -1,1 +1,44 @@
+name: CxAlloy Equipment Sync
+
+on:
+  schedule:
+    # Runs daily at 11:00 UTC. Adjust for your timezone -
+    # e.g. for 6:00 AM US Eastern (UTC-5/-4), use '0 10 * * *' or '0 11 * * *'
+    # depending on daylight saving time.
+    - cron: '0 11 * * *'
+  workflow_dispatch: {}
+    # ^ lets you trigger this manually from the "Actions" tab in GitHub,
+    #   which is how you'll test it before trusting the schedule.
+
+permissions:
+  contents: write
+  # ^ needed so the workflow can commit the updated CSV back to the repo
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install requests
+
+      - name: Fetch CxAlloy data and write CSV
+        env:
+          CXALLOY_IDENTIFIER: ${{ secrets.CXALLOY_IDENTIFIER }}
+          CXALLOY_SECRET: ${{ secrets.CXALLOY_SECRET }}
+          CXALLOY_PROJECT_ID: ${{ vars.CXALLOY_PROJECT_ID }}
+        run: python cxalloy_to_csv.py
+
+      - name: Commit updated CSV back to repo
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "Daily CxAlloy equipment status sync"
+          file_pattern: data/equipment_status.csv
 
