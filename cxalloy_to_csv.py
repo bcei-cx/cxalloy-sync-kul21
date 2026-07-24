@@ -70,11 +70,54 @@ FIELDS = (
 )
 
 
+def _latest_entry(date_str: str, person_str: str):
+    """
+    A stage's date/person fields can contain multiple entries separated by
+    newlines (equipment gets tagged, un-tagged, and re-tagged over time).
+    This picks out the single most recent entry by actually parsing and
+    comparing the dates, rather than assuming the last item listed is newest.
+
+    Returns (latest_date, latest_person) as plain strings, or ("", "") if
+    there's nothing usable.
+    """
+    if not date_str:
+        return "", ""
+
+    dates = [d.strip() for d in date_str.split("\n")]
+    persons = [p.strip() for p in person_str.split("\n")] if person_str else []
+    # If a person entry is missing for some date, pad so indexes still line up
+    while len(persons) < len(dates):
+        persons.append("")
+
+    def parse(d):
+        for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d"):
+            try:
+                return datetime.strptime(d, fmt)
+            except ValueError:
+                continue
+        return None
+
+    parsed = [(parse(d), d, p) for d, p in zip(dates, persons) if d]
+    valid = [(dt, d, p) for dt, d, p in parsed if dt is not None]
+
+    if valid:
+        valid.sort(key=lambda x: x[0])
+        _, latest_date, latest_person = valid[-1]
+        return latest_date, latest_person
+
+    # Nothing parsed successfully (unexpected date format) - fall back to
+    # the last listed entry rather than losing the data entirely.
+    if dates:
+        return dates[-1], persons[-1] if persons else ""
+    return "", ""
+
+
 def flatten_extended_status(extended_status) -> dict:
     """
-    Turns the extended_status object (a dict of tag stages -> date/person)
-    into flat columns, plus a derived "current_stage" = the furthest stage
-    reached so far (the last one in TAG_STAGES order that has a non-empty date).
+    Turns the extended_status object (a dict of tag stages -> date/person,
+    where each can hold multiple newline-separated historical entries) into
+    flat columns holding only the LATEST date/person per stage, plus a
+    derived "current_stage" = the furthest stage reached so far.
 
     Handles extended_status being missing, empty, or unexpectedly a plain
     string (falls back gracefully instead of crashing the whole sync).
@@ -86,16 +129,17 @@ def flatten_extended_status(extended_status) -> dict:
 
     if isinstance(extended_status, dict):
         for stage in TAG_STAGES:
-            date_val = extended_status.get(f"{stage}_date", "") or ""
-            person_val = extended_status.get(f"{stage}_person", "") or ""
-            flat[f"{stage}_date"] = date_val
-            flat[f"{stage}_person"] = person_val
-            # Multiple dates can appear newline-separated (repeat tagging);
-            # take the most recent one for the "current stage" summary.
-            if date_val.strip():
+            raw_date = extended_status.get(f"{stage}_date", "") or ""
+            raw_person = extended_status.get(f"{stage}_person", "") or ""
+            latest_date, latest_person = _latest_entry(raw_date, raw_person)
+
+            flat[f"{stage}_date"] = latest_date
+            flat[f"{stage}_person"] = latest_person
+
+            if latest_date:
                 current_stage = TAG_STAGE_LABELS[stage]
-                current_stage_date = date_val.strip().split("\n")[-1]
-                current_stage_person = person_val.strip().split("\n")[-1]
+                current_stage_date = latest_date
+                current_stage_person = latest_person
 
     return {
         **flat,
