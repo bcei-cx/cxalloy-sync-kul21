@@ -9,8 +9,12 @@ Checklists use a different request pattern than equipment:
   - POST instead of GET, with a JSON body describing filters
   - The signature is computed over the JSON body + timestamp (not just
     the timestamp alone)
-  - The response is a wrapper: {description, page, records, total_count} -
-    pagination is driven by total_count, not by counting a returned batch
+  - The response is a wrapper: {description, page, records, total_count}.
+    NOTE: total_count's meaning is inconsistent in CxAlloy's own API docs
+    (its example value doesn't match the paired example description), so
+    pagination here does NOT rely on it - instead it stops once a page
+    comes back with fewer records than requested (perpage), the same
+    reliable signal used for the equipment endpoint.
 
 extended_status here holds a 4-stage workflow (Not Started -> In Progress ->
 Completed -> Reviewed), same idea as equipment's tag stages but different
@@ -94,8 +98,9 @@ def cxalloy_headers(body_str: str) -> dict:
 def get_checklists_for_project(project_id: str) -> list:
     checklists = []
     page = 1
+    max_pages = 200  # safety cap - 200 x 500 = 100,000 records, far beyond any real project
 
-    while True:
+    while page <= max_pages:
         body = {
             "project_id": int(project_id),
             "include": ["extended_status"],
@@ -117,13 +122,19 @@ def get_checklists_for_project(project_id: str) -> list:
         payload = resp.json()
 
         records = payload.get("records", [])
-        total_count = payload.get("total_count", 0)
-
         checklists.extend(records)
 
-        if not records or len(checklists) >= total_count:
+        # Stop once a page comes back with fewer records than we asked for
+        # (or none at all) - this is the reliable "end of data" signal,
+        # regardless of what total_count claims.
+        if len(records) < PER_PAGE:
             break
         page += 1
+    else:
+        print(
+            f"  WARNING: hit the {max_pages}-page safety cap for project "
+            f"{project_id} - there may be more checklists than were fetched."
+        )
 
     return checklists
 
