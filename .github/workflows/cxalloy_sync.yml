@@ -29,16 +29,22 @@ jobs:
       - name: Install dependencies
         run: pip install requests
 
-      - name: Fetch CxAlloy data and write CSV
+      - name: Fetch CxAlloy equipment data and write CSV
         env:
           CXALLOY_IDENTIFIER: ${{ secrets.CXALLOY_IDENTIFIER }}
           CXALLOY_SECRET: ${{ secrets.CXALLOY_SECRET }}
           CXALLOY_PROJECT_ID: ${{ vars.CXALLOY_PROJECT_ID }}
         run: python cxalloy_to_csv.py
 
-      - name: Commit updated CSV back to repo
+      - name: Fetch CxAlloy checklist data and write CSV
+        env:
+          CXALLOY_IDENTIFIER: ${{ secrets.CXALLOY_IDENTIFIER }}
+          CXALLOY_SECRET: ${{ secrets.CXALLOY_SECRET }}
+          CXALLOY_PROJECT_ID: ${{ vars.CXALLOY_PROJECT_ID }}
+        run: python cxalloy_checklist_to_csv.py
+
+      - name: Commit updated CSVs back to repo
         uses: stefanzweifel/git-auto-commit-action@v5
         with:
-          commit_message: "Daily CxAlloy equipment status sync"
-          file_pattern: data/equipment_status.csv
-
+          commit_message: "Daily CxAlloy equipment + checklist sync"
+          file_pattern: 'data/equipment_status.csv data/checklist_status.csv'
