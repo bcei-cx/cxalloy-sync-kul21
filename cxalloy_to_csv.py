@@ -67,7 +67,9 @@ STAGE_INDEX = {stage: i for i, stage in enumerate(TAG_STAGES)}
 
 # Reverse of TAG_STAGE_LABELS: "L1 Red Tag" -> "l1_red_tag", used to translate
 # the equipment's actual `status` field into a position in the workflow.
-LABEL_TO_STAGE = {label: stage for stage, label in TAG_STAGE_LABELS.items()}
+# Keyed by UPPERCASE so the match works regardless of how CxAlloy actually
+# capitalizes status text (seen as all-caps in practice, e.g. "L1 RED TAG").
+LABEL_TO_STAGE = {label.upper(): stage for stage, label in TAG_STAGE_LABELS.items()}
 
 FIELDS = (
     ["project_id", "equipment_id", "name", "type", "discipline",
@@ -170,12 +172,12 @@ def clean_stale_future_dates(flat: dict, status: str, unmatched_statuses: set) -
     where the equipment actually is now, any stage AFTER that point gets
     cleared out here.
 
-    If `status` doesn't match any known stage label exactly, nothing is
-    cleared (safer to leave data alone than guess wrong) - the unmatched
-    value is recorded in `unmatched_statuses` so it can be reported once,
-    at the end of the run, instead of failing silently.
+    If `status` doesn't match any known stage label exactly (case-insensitive),
+    nothing is cleared (safer to leave data alone than guess wrong) - the
+    unmatched value is recorded in `unmatched_statuses` so it can be
+    reported once, at the end of the run, instead of failing silently.
     """
-    stage_key = LABEL_TO_STAGE.get((status or "").strip())
+    stage_key = LABEL_TO_STAGE.get((status or "").strip().upper())
 
     if stage_key is None:
         if status:
