@@ -2,8 +2,8 @@ name: CxAlloy Equipment Sync
 
 on:
   schedule:
-    # Runs daily at 19:00 UTC = 3:00 AM Malaysia Time (MYT, UTC+8, no DST).
-    - cron: '0 19 * * *'
+    # Runs daily at 18:00 UTC = 2:00 AM Malaysia Time (MYT, UTC+8, no DST).
+    - cron: '0 18 * * *'
   workflow_dispatch: {}
     # ^ lets you trigger this manually from the "Actions" tab in GitHub,
     #   which is how you'll test it before trusting the schedule.
