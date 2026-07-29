@@ -62,6 +62,13 @@ for _stage in TAG_STAGES:
     EXTENDED_STATUS_FIELDS.append(f"{_stage}_date")
     EXTENDED_STATUS_FIELDS.append(f"{_stage}_person")
 
+# Position of each stage in the workflow, e.g. no_tag=0, l1_red_tag=1, ...
+STAGE_INDEX = {stage: i for i, stage in enumerate(TAG_STAGES)}
+
+# Reverse of TAG_STAGE_LABELS: "L1 Red Tag" -> "l1_red_tag", used to translate
+# the equipment's actual `status` field into a position in the workflow.
+LABEL_TO_STAGE = {label: stage for stage, label in TAG_STAGE_LABELS.items()}
+
 FIELDS = (
     ["project_id", "equipment_id", "name", "type", "discipline",
      "building", "floor", "space", "status"]
@@ -149,6 +156,60 @@ def flatten_extended_status(extended_status) -> dict:
     }
 
 
+def clean_stale_future_dates(flat: dict, status: str, unmatched_statuses: set) -> dict:
+    """
+    Uses the equipment's actual `status` field (the ground truth for where
+    it sits RIGHT NOW) to invalidate any stage dates that shouldn't still
+    be there.
+
+    Why this is needed: extended_status keeps historical dates forever,
+    even after a rollback. If equipment reached L2 Yellow Tag and was later
+    rolled back to L1 Red Tag, the old l2_yellow_tag_date is still sitting
+    in the data - which would incorrectly make it look like it's still at
+    (or has reached) L2 in any date-based check. Since `status` reflects
+    where the equipment actually is now, any stage AFTER that point gets
+    cleared out here.
+
+    If `status` doesn't match any known stage label exactly, nothing is
+    cleared (safer to leave data alone than guess wrong) - the unmatched
+    value is recorded in `unmatched_statuses` so it can be reported once,
+    at the end of the run, instead of failing silently.
+    """
+    stage_key = LABEL_TO_STAGE.get((status or "").strip())
+
+    if stage_key is None:
+        if status:
+            unmatched_statuses.add(status)
+        return flat
+
+    cutoff_index = STAGE_INDEX[stage_key]
+
+    for stage, idx in STAGE_INDEX.items():
+        if idx > cutoff_index:
+            flat[f"{stage}_date"] = ""
+            flat[f"{stage}_person"] = ""
+
+    # Recompute current_stage/date/person now that stale future dates are
+    # gone - scan stages up to (and including) the cutoff, in order, so the
+    # furthest one that still has a real date wins. Normally this will just
+    # be the status's own stage, but this also covers the rare case where
+    # that stage's own date is unexpectedly blank.
+    current_stage = ""
+    current_stage_date = ""
+    current_stage_person = ""
+    for stage, idx in STAGE_INDEX.items():
+        if idx <= cutoff_index and flat.get(f"{stage}_date"):
+            current_stage = TAG_STAGE_LABELS[stage]
+            current_stage_date = flat[f"{stage}_date"]
+            current_stage_person = flat[f"{stage}_person"]
+
+    flat["current_stage"] = current_stage
+    flat["current_stage_date"] = current_stage_date
+    flat["current_stage_person"] = current_stage_person
+
+    return flat
+
+
 def cxalloy_headers() -> dict:
     """Builds the required auth headers, signing the current timestamp."""
     timestamp = int(time.time())
@@ -216,11 +277,13 @@ def main():
 
     os.makedirs(os.path.dirname(OUTPUT_PATH), exist_ok=True)
     now = datetime.now(timezone.utc).isoformat()
+    unmatched_statuses = set()
 
     with open(OUTPUT_PATH, "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=FIELDS)
         writer.writeheader()
         for eq in all_equipment:
+            status = eq.get("status", "")
             row = {
                 "project_id": eq.get("project_id", eq.get("_project_id", "")),
                 "equipment_id": eq.get("equipment_id", ""),
@@ -230,13 +293,22 @@ def main():
                 "building": eq.get("building", ""),
                 "floor": eq.get("floor", ""),
                 "space": eq.get("space", ""),
-                "status": eq.get("status", ""),
+                "status": status,
                 "last_synced": now,
             }
-            row.update(flatten_extended_status(eq.get("extended_status")))
+            flat = flatten_extended_status(eq.get("extended_status"))
+            flat = clean_stale_future_dates(flat, status, unmatched_statuses)
+            row.update(flat)
             writer.writerow(row)
 
     print(f"Wrote {len(all_equipment)} rows to {OUTPUT_PATH}")
+
+    if unmatched_statuses:
+        print(
+            f"WARNING: {len(unmatched_statuses)} distinct status value(s) didn't match "
+            f"any known tag stage, so rollback cleanup was skipped for those rows: "
+            f"{sorted(unmatched_statuses)}"
+        )
 
 
 if __name__ == "__main__":
