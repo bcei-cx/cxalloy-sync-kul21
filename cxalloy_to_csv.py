@@ -1,10 +1,10 @@
 """
 CxAlloy -> CSV file sync.
 
-Pulls all equipment (with extended_status) for one or more CxAlloy projects
-and writes it to a single CSV file in this repo. A GitHub Actions workflow
-runs this daily and commits the updated file. Power BI reads the CSV
-directly from GitHub.
+Pulls all equipment (with extended_status and attributes) for one or more
+CxAlloy projects and writes it to a single CSV file in this repo. A GitHub
+Actions workflow runs this daily and commits the updated file. Power BI
+reads the CSV directly from GitHub.
 
 Required environment variables:
   CXALLOY_IDENTIFIER  - API key identifier from CxAlloy       (Secret)
@@ -32,6 +32,11 @@ CXALLOY_PROJECT_IDS = [
 
 CXALLOY_BASE_URL = "https://tq.cxalloy.com/api/v1"
 OUTPUT_PATH = "data/equipment_status.csv"
+
+# What we ask the /equipment endpoint to include, comma-separated.
+# "extended_status" -> tag-stage history (dates/people per commissioning stage)
+# "attributes"      -> project-configured custom fields (Supplier, Manufacturer, etc.)
+EQUIPMENT_INCLUDES = "extended_status,attributes"
 
 # The tag/commissioning stages returned inside extended_status, in workflow order.
 # Each stage has a "<stage>_date" and "<stage>_person" field.
@@ -70,13 +75,6 @@ STAGE_INDEX = {stage: i for i, stage in enumerate(TAG_STAGES)}
 # Keyed by UPPERCASE so the match works regardless of how CxAlloy actually
 # capitalizes status text (seen as all-caps in practice, e.g. "L1 RED TAG").
 LABEL_TO_STAGE = {label.upper(): stage for stage, label in TAG_STAGE_LABELS.items()}
-
-FIELDS = (
-    ["project_id", "equipment_id", "name", "type", "discipline",
-     "building", "floor", "space", "status"]
-    + EXTENDED_STATUS_FIELDS
-    + ["current_stage", "current_stage_date", "current_stage_person", "last_synced"]
-)
 
 
 def _latest_entry(date_str: str, person_str: str):
@@ -212,6 +210,33 @@ def clean_stale_future_dates(flat: dict, status: str, unmatched_statuses: set) -
     return flat
 
 
+def get_attribute_value(attributes, attribute_name: str) -> str:
+    """
+    The API returns `attributes` (when include=attributes) as a list of
+    dicts, one per configured attribute that has a value set, e.g.:
+
+      {"name": "Equipment Supplier", "value": "Bezaire Sdn Bhd",
+       "unit": "", "verified": "0", ...}
+
+    Position in the list isn't fixed - it varies per piece of equipment
+    depending on which attributes are set - so this searches by `name`
+    (case-insensitive) rather than assuming an index. Returns "" if the
+    equipment doesn't have that attribute set at all.
+    """
+    if not isinstance(attributes, list):
+        return ""
+
+    target = attribute_name.strip().lower()
+    for item in attributes:
+        if not isinstance(item, dict):
+            continue
+        if str(item.get("name", "")).strip().lower() == target:
+            value = item.get("value")
+            return value if value is not None else ""
+
+    return ""
+
+
 def cxalloy_headers() -> dict:
     """Builds the required auth headers, signing the current timestamp."""
     timestamp = int(time.time())
@@ -234,7 +259,11 @@ def get_equipment_for_project(project_id: str) -> list:
     equipment = []
     page = 1
     while True:
-        params = {"project_id": project_id, "include": "extended_status", "page": page}
+        params = {
+            "project_id": project_id,
+            "include": EQUIPMENT_INCLUDES,
+            "page": page,
+        }
         resp = requests.get(
             f"{CXALLOY_BASE_URL}/equipment",
             headers=cxalloy_headers(),
@@ -277,12 +306,20 @@ def main():
 
     print(f"Total equipment records across all projects: {len(all_equipment)}")
 
-    os.makedirs(os.path.dirname(OUTPUT_PATH), exist_ok=True)
-    now = datetime.now(timezone.utc).isoformat()
     unmatched_statuses = set()
 
+    fields = (
+        ["project_id", "equipment_id", "name", "type", "discipline",
+         "building", "floor", "space", "status", "equipment_supplier_value"]
+        + EXTENDED_STATUS_FIELDS
+        + ["current_stage", "current_stage_date", "current_stage_person", "last_synced"]
+    )
+
+    os.makedirs(os.path.dirname(OUTPUT_PATH), exist_ok=True)
+    now = datetime.now(timezone.utc).isoformat()
+
     with open(OUTPUT_PATH, "w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=FIELDS)
+        writer = csv.DictWriter(f, fieldnames=fields, restval="")
         writer.writeheader()
         for eq in all_equipment:
             status = eq.get("status", "")
@@ -296,11 +333,16 @@ def main():
                 "floor": eq.get("floor", ""),
                 "space": eq.get("space", ""),
                 "status": status,
+                "equipment_supplier_value": get_attribute_value(
+                    eq.get("attributes"), "Equipment Supplier"
+                ),
                 "last_synced": now,
             }
-            flat = flatten_extended_status(eq.get("extended_status"))
-            flat = clean_stale_future_dates(flat, status, unmatched_statuses)
-            row.update(flat)
+
+            flat_status = flatten_extended_status(eq.get("extended_status"))
+            flat_status = clean_stale_future_dates(flat_status, status, unmatched_statuses)
+            row.update(flat_status)
+
             writer.writerow(row)
 
     print(f"Wrote {len(all_equipment)} rows to {OUTPUT_PATH}")
