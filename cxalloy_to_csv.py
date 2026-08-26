@@ -18,6 +18,7 @@ import time
 import hmac
 import hashlib
 import csv
+import re
 from datetime import datetime, timezone
 
 import requests
@@ -36,7 +37,8 @@ OUTPUT_PATH = "data/equipment_status.csv"
 # What we ask the /equipment endpoint to include, comma-separated.
 # "extended_status" -> tag-stage history (dates/people per commissioning stage)
 # "attributes"      -> project-configured custom fields (Supplier, Manufacturer, etc.)
-EQUIPMENT_INCLUDES = "extended_status,attributes"
+# "systems"         -> systems this equipment is linked to (e.g. Chilled Water System)
+EQUIPMENT_INCLUDES = "extended_status,attributes,systems"
 
 # The tag/commissioning stages returned inside extended_status, in workflow order.
 # Each stage has a "<stage>_date" and "<stage>_person" field.
@@ -210,47 +212,99 @@ def clean_stale_future_dates(flat: dict, status: str, unmatched_statuses: set) -
     return flat
 
 
-def _normalize_attribute_name(name: str) -> str:
+def slugify_attribute_name(name: str) -> str:
     """
-    "Equipment Supplier", "equipment_supplier", and "EQUIPMENT-SUPPLIER" all
-    normalize to the same string, so lookups aren't broken by minor
-    spacing/case/underscore differences between how you refer to an
-    attribute and how CxAlloy actually labeled it.
+    Turns an attribute's display name into a CSV-safe column name, e.g.
+    "Equipment Supplier" -> "equipment_supplier". Any character that isn't
+    a letter/digit becomes an underscore, and repeats/edges are collapsed,
+    so "Area / Type!" -> "area_type" rather than "area___type_".
     """
-    return " ".join(str(name).replace("_", " ").replace("-", " ").split()).lower()
+    slug = re.sub(r"[^a-z0-9]+", "_", str(name).strip().lower()).strip("_")
+    return slug or "attribute"
 
 
-def get_attribute_value(attributes, attribute_name: str) -> str:
+def flatten_attributes(attributes, unmatched_attribute_shapes: set) -> dict:
     """
-    The API returns `attributes` (when include=attributes) as a list of
-    dicts, one per configured attribute that has a value set, e.g.:
+    Turns the equipment's `attributes` field (returned when
+    include=attributes) into a flat {column_name: value} dict covering
+    EVERY attribute set on that equipment - not just specific ones - so
+    the CSV ends up with one column per attribute your project has
+    configured (Equipment Supplier, Area Type, Tranche, Manufacturer,
+    Serial Number, whatever else exists), generated automatically rather
+    than hardcoded here.
 
+    Expects the confirmed shape:
       {"name": "Equipment Supplier", "value": "Bezaire Sdn Bhd",
        "unit": "", "verified": "0", ...}
 
-    Position in the list isn't fixed - it varies per piece of equipment
-    depending on which attributes are set - so this searches by `name`
-    (normalized, case/spacing-insensitive) rather than assuming an index.
-    Returns "" if the equipment doesn't have that attribute set at all.
+    Anything that doesn't match this shape (missing a "name" key, or the
+    whole `attributes` field not being a list) gets recorded in
+    `unmatched_attribute_shapes` instead of silently vanishing, so it
+    surfaces as a warning at the end of the run.
 
-    NOTE: this only finds an exact (normalized) name match. If a lookup
-    keeps coming back empty for every row, double check the attribute's
-    exact name in CxAlloy under Project Settings -> Attributes - it may be
-    called something slightly different than expected (e.g. "Zone Type"
-    instead of "Area Type").
+    NOTE ON COLUMN STABILITY: since columns are derived from whatever
+    attribute names actually appear in this run's data, an attribute that
+    happens to be unset on every piece of equipment today won't produce a
+    column today - and will reappear once something has it set. If a
+    downstream tool expects a fixed set of columns, that's worth knowing
+    before relying on this.
     """
+    flat = {}
+
     if not isinstance(attributes, list):
+        if attributes:
+            unmatched_attribute_shapes.add(repr(attributes)[:80])
+        return flat
+
+    for item in attributes:
+        if not isinstance(item, dict) or "name" not in item:
+            unmatched_attribute_shapes.add(repr(item)[:80])
+            continue
+
+        column = slugify_attribute_name(item["name"])
+        value = item.get("value")
+        flat[column] = value if value is not None else ""
+
+    return flat
+
+
+def get_system_names(systems, unmatched_system_shapes: set) -> str:
+    """
+    Turns the equipment's `systems` field (returned when include=systems)
+    into a single semicolon-separated string of system names - equipment
+    can be linked to more than one system, so this joins all of them
+    rather than picking just one.
+
+    Expects a list of dicts, each with a "name" field (matching the
+    pattern seen elsewhere in the API, e.g. attribute entries also use
+    "name"). Falls back to a couple of other likely key names ("system_name",
+    "system") in case that assumption is wrong for this endpoint.
+
+    NOTE: this hasn't been confirmed against the actual schema for this
+    include - if the "systems" column comes back empty for every row (the
+    same failure mode we just hit with equipment_supplier_value), check the
+    unmatched_system_shapes warning printed at the end of the run - it'll
+    show you the raw shape so the key name here can be corrected.
+    """
+    if not isinstance(systems, list):
+        if systems:
+            unmatched_system_shapes.add(repr(systems)[:80])
         return ""
 
-    target = _normalize_attribute_name(attribute_name)
-    for item in attributes:
-        if not isinstance(item, dict):
-            continue
-        if _normalize_attribute_name(item.get("name", "")) == target:
-            value = item.get("value")
-            return value if value is not None else ""
+    names = []
+    for item in systems:
+        if isinstance(item, dict):
+            name = item.get("name") or item.get("system_name") or item.get("system")
+            if name:
+                names.append(str(name))
+            else:
+                unmatched_system_shapes.add(repr(item)[:80])
+        elif isinstance(item, str):
+            names.append(item)
+        else:
+            unmatched_system_shapes.add(repr(item)[:80])
 
-    return ""
+    return "; ".join(names)
 
 
 def cxalloy_headers() -> dict:
@@ -323,11 +377,27 @@ def main():
     print(f"Total equipment records across all projects: {len(all_equipment)}")
 
     unmatched_statuses = set()
+    unmatched_system_shapes = set()
+    unmatched_attribute_shapes = set()
+
+    # Flatten every equipment's attributes up front so we know the full set
+    # of attribute columns before writing the CSV header.
+    flat_attributes_by_record = []
+    attribute_columns = set()
+    for eq in all_equipment:
+        flat_attrs = flatten_attributes(eq.get("attributes"), unmatched_attribute_shapes)
+        flat_attributes_by_record.append(flat_attrs)
+        attribute_columns.update(flat_attrs.keys())
+
+    # Sorted for a stable column order across runs (avoids noisy diffs in
+    # the committed CSV just because set ordering shifted between runs).
+    attribute_columns = sorted(attribute_columns)
 
     fields = (
         ["project_id", "equipment_id", "name", "type", "discipline",
-         "building", "floor", "space", "status", "equipment_supplier_value",
-         "area_type", "tranche"]
+         "building", "floor", "space", "status"]
+        + attribute_columns
+        + ["systems"]
         + EXTENDED_STATUS_FIELDS
         + ["current_stage", "current_stage_date", "current_stage_person", "last_synced"]
     )
@@ -336,9 +406,11 @@ def main():
     now = datetime.now(timezone.utc).isoformat()
 
     with open(OUTPUT_PATH, "w", newline="", encoding="utf-8") as f:
+        # restval="" fills in blank cells for equipment missing a given
+        # attribute (e.g. a VAV box won't have every field an AHU has).
         writer = csv.DictWriter(f, fieldnames=fields, restval="")
         writer.writeheader()
-        for eq in all_equipment:
+        for eq, flat_attrs in zip(all_equipment, flat_attributes_by_record):
             status = eq.get("status", "")
             row = {
                 "project_id": eq.get("project_id", eq.get("_project_id", "")),
@@ -350,13 +422,10 @@ def main():
                 "floor": eq.get("floor", ""),
                 "space": eq.get("space", ""),
                 "status": status,
-                "equipment_supplier_value": get_attribute_value(
-                    eq.get("attributes"), "Equipment Supplier"
-                ),
-                "area_type": get_attribute_value(eq.get("attributes"), "Area Type"),
-                "tranche": get_attribute_value(eq.get("attributes"), "Tranche"),
+                "systems": get_system_names(eq.get("systems"), unmatched_system_shapes),
                 "last_synced": now,
             }
+            row.update(flat_attrs)
 
             flat_status = flatten_extended_status(eq.get("extended_status"))
             flat_status = clean_stale_future_dates(flat_status, status, unmatched_statuses)
@@ -365,6 +434,7 @@ def main():
             writer.writerow(row)
 
     print(f"Wrote {len(all_equipment)} rows to {OUTPUT_PATH}")
+    print(f"Attribute columns found this run: {attribute_columns}")
 
     if unmatched_statuses:
         print(
@@ -372,6 +442,23 @@ def main():
             f"any known tag stage, so rollback cleanup was skipped for those rows: "
             f"{sorted(unmatched_statuses)}"
         )
+
+    if unmatched_system_shapes:
+        print(
+            f"WARNING: {len(unmatched_system_shapes)} 'systems' entries didn't match "
+            f"the expected shape and were skipped - inspect these and update "
+            f"get_system_names() key names if needed:\n"
+            + "\n".join(f"  {s}" for s in sorted(unmatched_system_shapes))
+        )
+
+    if unmatched_attribute_shapes:
+        print(
+            f"WARNING: {len(unmatched_attribute_shapes)} attribute entries didn't match "
+            f"the expected shape and were skipped:\n"
+            + "\n".join(f"  {s}" for s in sorted(unmatched_attribute_shapes))
+        )
+
+
 
 
 if __name__ == "__main__":
