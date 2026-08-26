@@ -210,6 +210,16 @@ def clean_stale_future_dates(flat: dict, status: str, unmatched_statuses: set) -
     return flat
 
 
+def _normalize_attribute_name(name: str) -> str:
+    """
+    "Equipment Supplier", "equipment_supplier", and "EQUIPMENT-SUPPLIER" all
+    normalize to the same string, so lookups aren't broken by minor
+    spacing/case/underscore differences between how you refer to an
+    attribute and how CxAlloy actually labeled it.
+    """
+    return " ".join(str(name).replace("_", " ").replace("-", " ").split()).lower()
+
+
 def get_attribute_value(attributes, attribute_name: str) -> str:
     """
     The API returns `attributes` (when include=attributes) as a list of
@@ -220,17 +230,23 @@ def get_attribute_value(attributes, attribute_name: str) -> str:
 
     Position in the list isn't fixed - it varies per piece of equipment
     depending on which attributes are set - so this searches by `name`
-    (case-insensitive) rather than assuming an index. Returns "" if the
-    equipment doesn't have that attribute set at all.
+    (normalized, case/spacing-insensitive) rather than assuming an index.
+    Returns "" if the equipment doesn't have that attribute set at all.
+
+    NOTE: this only finds an exact (normalized) name match. If a lookup
+    keeps coming back empty for every row, double check the attribute's
+    exact name in CxAlloy under Project Settings -> Attributes - it may be
+    called something slightly different than expected (e.g. "Zone Type"
+    instead of "Area Type").
     """
     if not isinstance(attributes, list):
         return ""
 
-    target = attribute_name.strip().lower()
+    target = _normalize_attribute_name(attribute_name)
     for item in attributes:
         if not isinstance(item, dict):
             continue
-        if str(item.get("name", "")).strip().lower() == target:
+        if _normalize_attribute_name(item.get("name", "")) == target:
             value = item.get("value")
             return value if value is not None else ""
 
@@ -310,7 +326,8 @@ def main():
 
     fields = (
         ["project_id", "equipment_id", "name", "type", "discipline",
-         "building", "floor", "space", "status", "equipment_supplier_value"]
+         "building", "floor", "space", "status", "equipment_supplier_value",
+         "area_type", "tranche"]
         + EXTENDED_STATUS_FIELDS
         + ["current_stage", "current_stage_date", "current_stage_person", "last_synced"]
     )
@@ -336,6 +353,8 @@ def main():
                 "equipment_supplier_value": get_attribute_value(
                     eq.get("attributes"), "Equipment Supplier"
                 ),
+                "area_type": get_attribute_value(eq.get("attributes"), "Area Type"),
+                "tranche": get_attribute_value(eq.get("attributes"), "Tranche"),
                 "last_synced": now,
             }
 
