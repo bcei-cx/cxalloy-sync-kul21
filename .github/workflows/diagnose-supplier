@@ -1,0 +1,20 @@
+# .github/workflows/diagnose-supplier.yml
+name: Diagnose Supplier Field
+
+on:
+  workflow_dispatch:   # only runs when you click "Run workflow" - never on a schedule
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+      - run: pip install requests
+      - run: python diagnose_supplier_field.py
+        env:
+          CXALLOY_IDENTIFIER: ${{ secrets.CXALLOY_IDENTIFIER }}
+          CXALLOY_SECRET: ${{ secrets.CXALLOY_SECRET }}
+          CXALLOY_PROJECT_ID: ${{ vars.CXALLOY_PROJECT_ID }}
