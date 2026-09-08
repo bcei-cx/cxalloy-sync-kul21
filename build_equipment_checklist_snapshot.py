@@ -8,6 +8,7 @@ Output:
   data/checklist_completion_by_equipment.csv
 
 One row per equipment, with L1-L5 checklist completion percentages and counts.
+The actual equipment type is joined from equipment_status.csv.
 """
 
 import csv
@@ -20,9 +21,9 @@ LEVELS = ["L1", "L2", "L3", "L4", "L5"]
 
 BASE_FIELDS = [
     "snapshot_date", "project_id", "asset_key", "asset_name", "asset_type",
-    "discipline", "building", "floor", "space", "tranche", "systems",
-    "equipment_supplier", "overall_completion_pct", "overall_completed_lines",
-    "overall_total_lines", "overall_open_lines",
+    "equipment_type", "discipline", "building", "floor", "space", "tranche",
+    "systems", "equipment_supplier", "overall_completion_pct",
+    "overall_completed_lines", "overall_total_lines", "overall_open_lines",
 ]
 LEVEL_FIELDS = []
 for level in LEVELS:
@@ -89,7 +90,8 @@ def main():
             "project_id": project_id,
             "asset_key": asset_key,
             "asset_name": asset_name,
-            "asset_type": bucket["asset_type"] or eq.get("type", ""),
+            "asset_type": bucket["asset_type"],
+            "equipment_type": eq.get("type", ""),
             "discipline": eq.get("discipline", ""),
             "building": eq.get("building", ""),
             "floor": eq.get("floor", ""),
