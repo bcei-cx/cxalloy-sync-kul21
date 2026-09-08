@@ -12,12 +12,10 @@ from pathlib import Path
 import requests
 
 SOURCE_HTML = "https://raw.githubusercontent.com/sapoetra/cxalloy-kul21-dashboard/main/index.html"
-SOURCE_PROJECTED = "https://raw.githubusercontent.com/sapoetra/cxalloy-kul21-dashboard/main/projected_dates.xlsx"
+SHARED_PROJECTED = "https://raw.githubusercontent.com/sapoetra/cxalloy-kul21-dashboard/main/projected_dates.xlsx"
 OUT_HTML = Path("index.html")
-OUT_PROJECTED = Path("projected_dates.xlsx")
 
 NAV_ANCHOR = '    <button type="button" data-page="equipment">6. Equipment Register</button>'
-PAGE_ANCHOR = '  <!-- PAGE 6 · FULL EQUIPMENT REGISTER -->\n  <section class="page" id="page-equipment">'
 SCRIPT_ANCHOR = '/* ============================================================== 11. WIRE-UP */'
 BOOT_ANCHOR = "document.addEventListener('DOMContentLoaded', ()=>{\n  wire();\n  loadHostedData();\n});"
 
@@ -135,9 +133,6 @@ function clRenderKPIs(){
   }).join('');
 }
 function clFilteredDaily(){
-  // Daily trend is project-level. When the equipment page is filtered, limit
-  // project IDs to those still represented; detailed tranche/supplier/system
-  // history is intentionally not reconstructed from raw line items.
   const ids=new Set(checklistState.filtered.map(r=>txtValue(r.project_id)));
   return checklistState.daily.filter(r=>ids.has(txtValue(r.project_id)) && txtValue(r.commissioning_level)===checklistState.trendLevel);
 }
@@ -152,7 +147,7 @@ function clTrendPoints(){
   let pts=[...by.entries()].map(([date,x])=>({date,week:x.week,p:x.total?x.completed/x.total*100:0,total:x.total,completed:x.completed})).sort((a,b)=>a.date.localeCompare(b.date));
   if(checklistState.trendMode==='weekly'){
     const w=new Map();
-    pts.forEach(p=>w.set(p.week,p)); // keep latest daily snapshot in each week
+    pts.forEach(p=>w.set(p.week,p));
     pts=[...w.values()].sort((a,b)=>a.date.localeCompare(b.date));
   }
   return pts;
@@ -226,29 +221,24 @@ function wireChecklistPage(){
 '''
 
 
-def download(url: str, binary: bool = False):
+def download(url: str):
     r = requests.get(url, timeout=60)
     r.raise_for_status()
-    return r.content if binary else r.text
+    return r.text
 
 
 def build():
     html = download(SOURCE_HTML)
 
-    # Point the copied dashboard at the sync repository's live equipment data.
     html = html.replace("equipmentUrl: './equipment_status.csv'", "equipmentUrl: './data/equipment_status.csv'")
-    html = html.replace("projectedUrl: './projected_dates.xlsx'", "projectedUrl: './projected_dates.xlsx'")
+    html = html.replace("projectedUrl: './projected_dates.xlsx'", f"projectedUrl: '{SHARED_PROJECTED}'")
 
     if NAV_ANCHOR not in html:
         raise RuntimeError("Could not find dashboard navigation anchor")
     html = html.replace(NAV_ANCHOR, NAV_ANCHOR + '\n    <button type="button" data-page="checklists">7. Checklist Completion</button>', 1)
 
-    # Insert the new page immediately before the equipment-register page so the
-    # existing page markup remains untouched apart from one adjacent section.
-    if PAGE_ANCHOR not in html:
-        raise RuntimeError("Could not find equipment-page anchor")
-    # Page numbering is visual only; keep Equipment Register as page 6 and place
-    # checklist page after its closing section by using the script boundary.
+    if '</div>\n<script>\n"use strict";' not in html:
+        raise RuntimeError("Could not find dashboard body/script boundary")
     html = html.replace('</div>\n<script>\n"use strict";', CHECKLIST_PAGE + '\n</div>\n<script>\n"use strict";', 1)
 
     if SCRIPT_ANCHOR not in html:
@@ -260,10 +250,8 @@ def build():
     html = html.replace(BOOT_ANCHOR, "document.addEventListener('DOMContentLoaded', ()=>{\n  wire();\n  wireChecklistPage();\n  loadHostedData();\n  loadChecklistData();\n});", 1)
 
     OUT_HTML.write_text(html, encoding='utf-8')
-    OUT_PROJECTED.write_bytes(download(SOURCE_PROJECTED, binary=True))
     Path('.nojekyll').write_text('', encoding='utf-8')
     print(f"Built {OUT_HTML} ({OUT_HTML.stat().st_size:,} bytes)")
-    print(f"Copied {OUT_PROJECTED} ({OUT_PROJECTED.stat().st_size:,} bytes)")
 
 
 if __name__ == '__main__':
