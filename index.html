@@ -408,7 +408,7 @@ details.dq summary{cursor:pointer;color:var(--muted);font-size:11.5px}
     <div class="grid">
       <div class="card c12">
         <div class="card-head">
-          <div><h3>Checklist completion by equipment type</h3><div class="sub">Weighted checklist completion for each equipment type, split by commissioning level</div></div>
+          <div><h3>Checklist completion gap by equipment type</h3><div class="sub">Completed vs remaining to 100% · follows the Cx Level filter</div></div>
         </div>
         <div class="chart-box" id="clTypeChartBox"><canvas id="checklistByType"></canvas></div>
       </div>
@@ -2101,10 +2101,18 @@ function clRenderKPIs(){
 }
 function clRenderTypeChart(){
   const types=clUniqueFromRows(checklistState.filtered,'equipment_type');
-  const levels=checklistState.level==='ALL'?LEVELS:LEVELS.filter(l=>l.k===checklistState.level);
-  const datasets=levels.map(l=>({label:l.k,data:types.map(t=>{const rs=checklistState.filtered.filter(r=>txtValue(r.equipment_type)===t);return +clLevelStats(rs,l.k).p.toFixed(1);}),backgroundColor:cssVar(l.varc),borderColor:l.k==='L5'?cssVar('--line'):'transparent',borderWidth:l.k==='L5'?1:0}));
-  const box=document.getElementById('clTypeChartBox');box.style.height=Math.max(330,types.length*30+90)+'px';
-  upsert('checklistByType',{type:'bar',data:{labels:types,datasets},options:{indexAxis:'y',plugins:{legend:{position:'bottom'},tooltip:{callbacks:{label:c=>c.dataset.label+': '+c.parsed.x.toFixed(1)+'%'}}},scales:{x:{beginAtZero:true,max:100,grid:{color:gridColor()},ticks:{callback:v=>v+'%'},title:{display:true,text:'Checklist completion'}},y:{grid:{display:false},ticks:{autoSkip:false}}}}});
+  const level=checklistState.level==='ALL'?'Overall':checklistState.level;
+  const completed=types.map(t=>{const rs=checklistState.filtered.filter(r=>txtValue(r.equipment_type)===t);return +clLevelStats(rs,level).p.toFixed(1);});
+  const remaining=completed.map(v=>+(100-v).toFixed(1));
+  const box=document.getElementById('clTypeChartBox');box.style.height=Math.max(330,types.length*28+90)+'px';
+  upsert('checklistByType',{
+    type:'bar',
+    data:{labels:types,datasets:[
+      {label:'Completed',data:completed,backgroundColor:cssVar('--accent'),stack:'progress'},
+      {label:'Remaining to 100%',data:remaining,backgroundColor:cssVar('--line'),stack:'progress'}
+    ]},
+    options:{indexAxis:'y',plugins:{legend:{position:'bottom'},tooltip:{callbacks:{label:c=>c.dataset.label+': '+c.parsed.x.toFixed(1)+'%'}}},scales:{x:{stacked:true,beginAtZero:true,max:100,grid:{color:gridColor()},ticks:{callback:v=>v+'%'},title:{display:true,text:level+' checklist completion'}},y:{stacked:true,grid:{display:false},ticks:{autoSkip:false}}}}
+  });
 }
 function clUniqueFromRows(rows,k){return uniqSorted(rows.map(r=>txtValue(r[k])).filter(Boolean));}
 function clFilteredDaily(){const ids=new Set(checklistState.filtered.map(r=>txtValue(r.project_id)));return checklistState.daily.filter(r=>ids.has(txtValue(r.project_id))&&txtValue(r.commissioning_level)===checklistState.trendLevel);}
