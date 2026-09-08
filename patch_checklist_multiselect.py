@@ -7,7 +7,7 @@ if anchor not in html:
     raise SystemExit('Dashboard wire-up anchor not found')
 
 patch = r'''
-/* ================================================= CHECKLIST MULTI-SELECT */
+/* ======================================== CHECKLIST MULTI-SELECT + WEEKLY */
 const clMulti={levels:new Set(),types:new Set(),tranches:new Set(),disciplines:new Set(),systems:new Set(),suppliers:new Set()};
 const clMultiDefs=[
   {id:'clLevel',key:'levels',label:'Cx Level',field:null,values:['L1','L2','L3','L4','L5']},
@@ -17,6 +17,7 @@ const clMultiDefs=[
   {id:'clSystem',key:'systems',label:'System',field:'systems'},
   {id:'clSupplier',key:'suppliers',label:'Equipment Supplier',field:'equipment_supplier'}
 ];
+
 function clMSValues(def){return def.values||clUnique(def.field);}
 function clMSButton(def){
   const n=clMulti[def.key].size, el=document.querySelector('[data-clms="'+def.key+'"]>button');
@@ -61,11 +62,44 @@ function clRenderKPIs(){
   const chosen=clSelectedLevels(),levels=chosen.length?chosen:['Overall','L1','L2','L3','L4','L5'];
   document.getElementById('clKpis').innerHTML=levels.map(level=>{const x=clLevelStats(checklistState.filtered,level),l=LEVELS.find(z=>z.k===level),label=level==='Overall'?'Overall checklist completion':level+' checklist completion',color=level==='Overall'?'var(--accent)':'var('+(l?l.varc:'--accent')+')';return '<div class="kpi" style="cursor:default"><div class="k-label">'+label+'</div><div class="k-val">'+x.p.toFixed(1)+'<small>%</small></div><div class="bar"><i style="width:'+Math.min(100,x.p).toFixed(1)+'%;background:'+color+'"></i></div><div class="k-sub">'+fmtInt(x.completed)+' / '+fmtInt(x.total)+' lines · '+fmtInt(x.eq)+' equipment</div></div>';}).join('');
 }
+
+function clWeekInfo(){
+  const weeks=uniqSorted((checklistState.history||[]).map(r=>txtValue(r.week_start)).filter(Boolean));
+  return {current:weeks.length?weeks[weeks.length-1]:'',previous:weeks.length>1?weeks[weeks.length-2]:''};
+}
+function clEqKey(r){return txtValue(r.project_id)+'|'+txtValue(r.asset_key||r.asset_name);}
+function clLastWeekStats(currentRows,level){
+  const wk=clWeekInfo().previous;if(!wk)return null;
+  const keys=new Set(currentRows.map(clEqKey));
+  let total=0,completed=0;
+  (checklistState.history||[]).forEach(r=>{
+    if(txtValue(r.week_start)!==wk||txtValue(r.commissioning_level)!==level||!keys.has(clEqKey(r)))return;
+    total+=clNum(r.total_lines);completed+=clNum(r.completed_lines);
+  });
+  return total?{total,completed,p:completed/total*100}:null;
+}
 function clRenderHeatmap(){
-  const rows=checklistState.baseFiltered,types=clUniqueFromRows(rows,'equipment_type'),chosen=clSelectedLevels(),levels=chosen.length?LEVELS.filter(l=>clMulti.levels.has(l.k)):LEVELS;
+  const rows=checklistState.baseFiltered,types=clUniqueFromRows(rows,'equipment_type'),chosen=clSelectedLevels(),levels=chosen.length?LEVELS.filter(l=>clMulti.levels.has(l.k)):LEVELS,wk=clWeekInfo();
+  const card=document.getElementById('clHeatmap')?.closest('.card');
+  const sub=card?.querySelector('.sub');
+  if(sub)sub.textContent='Current week-to-date vs last completed week · Sunday 23:55 MYT cutoff'+(wk.previous?' · last week '+wk.previous:'');
   let h='<thead><tr><th>Equipment Type</th><th class="num">Equipment</th>'+levels.map(l=>'<th class="num"><span class="tagdot" style="background:var('+l.varc+')"></span>'+l.k+'</th>').join('')+'</tr></thead><tbody>';
   if(!types.length)h+='<tr><td colspan="'+(2+levels.length)+'" class="empty">No equipment types match the current filters.</td></tr>';
-  types.forEach(t=>{const rs=rows.filter(r=>txtValue(r.equipment_type)===t);h+='<tr><td><b>'+esc(t)+'</b></td><td class="num">'+fmtInt(rs.length)+'</td>';levels.forEach(l=>{const x=clLevelStats(rs,l.k),p=x.total?+x.p.toFixed(1):null;h+='<td class="num" style="'+clHeatStyle(p)+';font-weight:700">'+(p===null?'—':p.toFixed(1)+'%')+'</td>';});h+='</tr>';});
+  types.forEach(t=>{
+    const rs=rows.filter(r=>txtValue(r.equipment_type)===t);
+    h+='<tr><td><b>'+esc(t)+'</b></td><td class="num">'+fmtInt(rs.length)+'</td>';
+    levels.forEach(l=>{
+      const x=clLevelStats(rs,l.k),p=x.total?+x.p.toFixed(1):null,lw=clLastWeekStats(rs,l.k);
+      let cell='—';
+      if(p!==null){
+        const delta=lw?+(p-lw.p).toFixed(1):null;
+        const d=delta===null?'':(' · '+(delta>0?'+':'')+delta.toFixed(1)+'pp');
+        cell='<div style="font-size:13px;font-weight:700">'+p.toFixed(1)+'%</div><div style="font-size:10.5px;font-weight:500;opacity:.78;margin-top:2px">'+(lw?'Last week '+lw.p.toFixed(1)+'%'+d:'Last week —')+'</div>';
+      }
+      h+='<td class="num" style="'+clHeatStyle(p)+';vertical-align:middle">'+cell+'</td>';
+    });
+    h+='</tr>';
+  });
   document.getElementById('clHeatmap').innerHTML=h+'</tbody>';
 }
 function clCombinedStats(rows,levels){let total=0,completed=0;levels.forEach(k=>{const x=clLevelStats(rows,k);total+=x.total;completed+=x.completed;});return {total,completed,p:total?completed/total*100:0};}
@@ -74,6 +108,24 @@ function clRenderRankChart(){
   const ranked=clUniqueFromRows(rows,'equipment_type').map(t=>{const rs=rows.filter(r=>txtValue(r.equipment_type)===t),x=chosen.length?clCombinedStats(rs,chosen):clLevelStats(rs,'Overall');return {type:t,p:+x.p.toFixed(1),total:x.total};}).filter(x=>x.total>0).sort((a,b)=>b.p-a.p||a.type.localeCompare(b.type));
   const box=document.getElementById('clRankBox');box.style.height=Math.max(300,ranked.length*27+80)+'px';document.getElementById('clRankSub').textContent=label+' completion ranked by equipment type · bar length shows distance to 100%';
   upsert('checklistRank',{type:'bar',data:{labels:ranked.map(x=>x.type),datasets:[{label:label+' completion',data:ranked.map(x=>x.p),backgroundColor:cssVar('--accent')}]},options:{indexAxis:'y',plugins:{legend:{display:false},tooltip:{callbacks:{label:c=>c.parsed.x.toFixed(1)+'% complete'}}},scales:{x:{beginAtZero:true,max:100,grid:{color:gridColor()},ticks:{callback:v=>v+'%'},title:{display:true,text:'Completion percentage'}},y:{grid:{display:false},ticks:{autoSkip:false}}}}});
+}
+
+async function loadChecklistData(){
+  try{
+    const [a,b,c]=await Promise.all([
+      fetch('./data/checklist_completion_by_equipment.csv',{cache:'no-store'}),
+      fetch('./data/checklist_progress_daily.csv',{cache:'no-store'}),
+      fetch('./data/checklist_progress_history.csv',{cache:'no-store'})
+    ]);
+    if(!a.ok)throw new Error('Checklist snapshot HTTP '+a.status);
+    if(!b.ok)throw new Error('Checklist trend HTTP '+b.status);
+    if(!c.ok)throw new Error('Checklist weekly history HTTP '+c.status);
+    const parse=t=>new Promise((resolve,reject)=>Papa.parse(t,{header:true,skipEmptyLines:'greedy',complete:r=>resolve(r.data),error:reject}));
+    checklistState.current=await parse(await a.text());
+    checklistState.daily=await parse(await b.text());
+    checklistState.history=await parse(await c.text());
+    clBuildFilters();clRefresh();
+  }catch(err){console.error(err);document.getElementById('clTable').innerHTML='<tbody><tr><td class="empty">Checklist data failed to load: '+esc(err.message||err)+'</td></tr></tbody>';}
 }
 function wireChecklistPage(){
   document.getElementById('clQ').oninput=debounce(e=>{checklistState.q=e.target.value;clRefresh();},250);
@@ -88,4 +140,4 @@ function wireChecklistPage(){
 
 html = html.replace(anchor, patch + '\n\n' + anchor, 1)
 path.write_text(html, encoding='utf-8')
-print('Applied checklist multi-select filters')
+print('Applied checklist multi-select filters and prior-week comparison')
