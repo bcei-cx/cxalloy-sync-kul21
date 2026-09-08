@@ -1,6 +1,11 @@
 name: CxAlloy Equipment Sync
 
 on:
+  push:
+    branches: [main]
+    paths:
+      - 'build_dashboard.py'
+      - '.github/workflows/cxalloy_sync.yml'
   schedule:
     # Runs daily at 18:00 UTC = 2:00 AM Malaysia Time (MYT, UTC+8, no DST).
     - cron: '0 18 * * *'
