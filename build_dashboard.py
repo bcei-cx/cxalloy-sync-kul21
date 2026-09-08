@@ -35,9 +35,23 @@ CHECKLIST_PAGE = r'''
     <div class="grid">
       <div class="card c12">
         <div class="card-head">
-          <div><h3>Checklist completion gap by equipment type</h3><div class="sub">Completed vs remaining to 100% · follows the Cx Level filter</div></div>
+          <div><h3>Checklist completion by equipment type</h3><div class="sub">Each cell is the weighted completion percentage for that equipment type and Cx level</div></div>
+          <div class="legend" style="margin-top:0">
+            <span><i style="background:#f7cccc"></i>0–25%</span>
+            <span><i style="background:#f9dcc3"></i>25–50%</span>
+            <span><i style="background:#fbedbd"></i>50–75%</span>
+            <span><i style="background:#d9f0e3"></i>75–99%</span>
+            <span><i style="background:#b7e4cc"></i>100%</span>
+          </div>
         </div>
-        <div class="chart-box" id="clTypeChartBox"><canvas id="checklistByType"></canvas></div>
+        <div class="tbl-scroll" style="max-height:620px"><table id="clHeatmap"></table></div>
+      </div>
+
+      <div class="card c12">
+        <div class="card-head">
+          <div><h3>Selected level progress by equipment type</h3><div class="sub" id="clRankSub">Overall completion ranked by equipment type</div></div>
+        </div>
+        <div class="chart-box" id="clRankBox"><canvas id="checklistRank"></canvas></div>
       </div>
 
       <div class="card c12">
@@ -69,7 +83,7 @@ CHECKLIST_PAGE = r'''
 CHECKLIST_JS = r'''
 /* ===================================================== CHECKLIST COMPLETION */
 const CHECKLIST_DATA={currentUrl:'./data/checklist_completion_by_equipment.csv',dailyUrl:'./data/checklist_progress_daily.csv'};
-const checklistState={current:[],daily:[],filtered:[],page:0,pageSize:100,q:'',level:'ALL',type:'ALL',tranche:'ALL',discipline:'ALL',system:'ALL',supplier:'ALL',trendMode:'daily',trendLevel:'Overall'};
+const checklistState={current:[],daily:[],baseFiltered:[],filtered:[],page:0,pageSize:100,q:'',level:'ALL',type:'ALL',tranche:'ALL',discipline:'ALL',system:'ALL',supplier:'ALL',trendMode:'daily',trendLevel:'Overall'};
 
 function clNum(v){const n=Number(v);return Number.isFinite(n)?n:0;}
 function clPctCell(v){
@@ -78,22 +92,32 @@ function clPctCell(v){
   const bg=n<40?'var(--heat-red)':n<=75?'var(--heat-amber)':'var(--heat-green)';
   return '<span style="display:inline-block;min-width:58px;text-align:right;padding:2px 6px;border-radius:5px;background:'+bg+'">'+n.toFixed(1)+'%</span>';
 }
+function clHeatStyle(p){
+  if(p===null)return 'background:var(--line-2);color:var(--muted)';
+  if(p<=25)return 'background:#f7cccc;color:#7f1d1d';
+  if(p<=50)return 'background:#f9dcc3;color:#7c2d12';
+  if(p<=75)return 'background:#fbedbd;color:#713f12';
+  if(p<100)return 'background:#d9f0e3;color:#14532d';
+  return 'background:#b7e4cc;color:#14532d';
+}
 function clUnique(k){return uniqSorted(checklistState.current.map(r=>txtValue(r[k])).filter(Boolean));}
+function clUniqueFromRows(rows,k){return uniqSorted(rows.map(r=>txtValue(r[k])).filter(Boolean));}
 function clFill(id,vals){const e=document.getElementById(id);e.innerHTML='<option value="ALL">All</option>'+vals.map(v=>'<option value="'+esc(v)+'">'+esc(v)+'</option>').join('');}
 function clBuildFilters(){clFill('clType',clUnique('equipment_type'));clFill('clTranche',clUnique('tranche'));clFill('clDiscipline',clUnique('discipline'));clFill('clSystem',clUnique('systems'));clFill('clSupplier',clUnique('equipment_supplier'));}
 function clHasLevel(r,k){return clNum(r[k+'_total_lines'])>0;}
 function clApplyFilters(){
   const s=checklistState,q=s.q.trim().toUpperCase();
-  s.filtered=s.current.filter(r=>{
+  s.baseFiltered=s.current.filter(r=>{
     if(q&&!txtValue(r.asset_name).toUpperCase().includes(q))return false;
-    if(s.level!=='ALL'&&!clHasLevel(r,s.level))return false;
     if(s.type!=='ALL'&&txtValue(r.equipment_type)!==s.type)return false;
     if(s.tranche!=='ALL'&&txtValue(r.tranche)!==s.tranche)return false;
     if(s.discipline!=='ALL'&&txtValue(r.discipline)!==s.discipline)return false;
     if(s.system!=='ALL'&&txtValue(r.systems)!==s.system)return false;
     if(s.supplier!=='ALL'&&txtValue(r.equipment_supplier)!==s.supplier)return false;
     return true;
-  });s.page=0;
+  });
+  s.filtered=s.level==='ALL'?s.baseFiltered:s.baseFiltered.filter(r=>clHasLevel(r,s.level));
+  s.page=0;
 }
 function clLevelStats(rows,level){
   const tp=level==='Overall'?'overall_total_lines':level+'_total_lines',cp=level==='Overall'?'overall_completed_lines':level+'_completed_lines';
@@ -104,22 +128,33 @@ function clRenderKPIs(){
   const levels=checklistState.level==='ALL'?['Overall','L1','L2','L3','L4','L5']:[checklistState.level];
   document.getElementById('clKpis').innerHTML=levels.map(level=>{const x=clLevelStats(checklistState.filtered,level);const label=level==='Overall'?'Overall checklist completion':level+' checklist completion';const l=LEVELS.find(z=>z.k===level);const color=level==='Overall'?'var(--accent)':'var('+(l?l.varc:'--accent')+')';return '<div class="kpi" style="cursor:default"><div class="k-label">'+label+'</div><div class="k-val">'+x.p.toFixed(1)+'<small>%</small></div><div class="bar"><i style="width:'+Math.min(100,x.p).toFixed(1)+'%;background:'+color+'"></i></div><div class="k-sub">'+fmtInt(x.completed)+' / '+fmtInt(x.total)+' lines · '+fmtInt(x.eq)+' equipment</div></div>';}).join('');
 }
-function clRenderTypeChart(){
-  const types=clUniqueFromRows(checklistState.filtered,'equipment_type');
-  const level=checklistState.level==='ALL'?'Overall':checklistState.level;
-  const completed=types.map(t=>{const rs=checklistState.filtered.filter(r=>txtValue(r.equipment_type)===t);return +clLevelStats(rs,level).p.toFixed(1);});
-  const remaining=completed.map(v=>+(100-v).toFixed(1));
-  const box=document.getElementById('clTypeChartBox');box.style.height=Math.max(330,types.length*28+90)+'px';
-  upsert('checklistByType',{
-    type:'bar',
-    data:{labels:types,datasets:[
-      {label:'Completed',data:completed,backgroundColor:cssVar('--accent'),stack:'progress'},
-      {label:'Remaining to 100%',data:remaining,backgroundColor:cssVar('--line'),stack:'progress'}
-    ]},
-    options:{indexAxis:'y',plugins:{legend:{position:'bottom'},tooltip:{callbacks:{label:c=>c.dataset.label+': '+c.parsed.x.toFixed(1)+'%'}}},scales:{x:{stacked:true,beginAtZero:true,max:100,grid:{color:gridColor()},ticks:{callback:v=>v+'%'},title:{display:true,text:level+' checklist completion'}},y:{stacked:true,grid:{display:false},ticks:{autoSkip:false}}}}
+function clRenderHeatmap(){
+  const rows=checklistState.baseFiltered;
+  const types=clUniqueFromRows(rows,'equipment_type');
+  let h='<thead><tr><th>Equipment Type</th><th class="num">Equipment</th>'+LEVELS.map(l=>'<th class="num"><span class="tagdot" style="background:var('+l.varc+')"></span>'+l.k+'</th>').join('')+'</tr></thead><tbody>';
+  if(!types.length)h+='<tr><td colspan="7" class="empty">No equipment types match the current filters.</td></tr>';
+  types.forEach(t=>{
+    const rs=rows.filter(r=>txtValue(r.equipment_type)===t);
+    h+='<tr><td><b>'+esc(t)+'</b></td><td class="num">'+fmtInt(rs.length)+'</td>';
+    LEVELS.forEach(l=>{
+      const x=clLevelStats(rs,l.k),p=x.total?+x.p.toFixed(1):null;
+      h+='<td class="num" style="'+clHeatStyle(p)+';font-weight:700">'+(p===null?'—':p.toFixed(1)+'%')+'</td>';
+    });
+    h+='</tr>';
   });
+  document.getElementById('clHeatmap').innerHTML=h+'</tbody>';
 }
-function clUniqueFromRows(rows,k){return uniqSorted(rows.map(r=>txtValue(r[k])).filter(Boolean));}
+function clRenderRankChart(){
+  const level=checklistState.level==='ALL'?'Overall':checklistState.level;
+  const rows=checklistState.filtered;
+  const ranked=clUniqueFromRows(rows,'equipment_type').map(t=>{
+    const rs=rows.filter(r=>txtValue(r.equipment_type)===t),x=clLevelStats(rs,level);
+    return {type:t,p:+x.p.toFixed(1),eq:x.eq,total:x.total};
+  }).filter(x=>x.total>0).sort((a,b)=>b.p-a.p||a.type.localeCompare(b.type));
+  const box=document.getElementById('clRankBox');box.style.height=Math.max(300,ranked.length*27+80)+'px';
+  document.getElementById('clRankSub').textContent=level+' completion ranked by equipment type · bar length shows distance to 100%';
+  upsert('checklistRank',{type:'bar',data:{labels:ranked.map(x=>x.type),datasets:[{label:level+' completion',data:ranked.map(x=>x.p),backgroundColor:cssVar('--accent')} ]},options:{indexAxis:'y',plugins:{legend:{display:false},tooltip:{callbacks:{label:c=>c.parsed.x.toFixed(1)+'% complete'}}},scales:{x:{beginAtZero:true,max:100,grid:{color:gridColor()},ticks:{callback:v=>v+'%'},title:{display:true,text:'Completion percentage'}},y:{grid:{display:false},ticks:{autoSkip:false}}}}});
+}
 function clFilteredDaily(){const ids=new Set(checklistState.filtered.map(r=>txtValue(r.project_id)));return checklistState.daily.filter(r=>ids.has(txtValue(r.project_id))&&txtValue(r.commissioning_level)===checklistState.trendLevel);}
 function clTrendPoints(){
   const by=new Map();clFilteredDaily().forEach(r=>{const d=txtValue(r.snapshot_date);if(!d)return;if(!by.has(d))by.set(d,{completed:0,total:0,week:txtValue(r.week_start)});const x=by.get(d);x.completed+=clNum(r.completed_lines);x.total+=clNum(r.total_lines);});
@@ -134,7 +169,7 @@ function clRenderTable(){
   slice.forEach(r=>{h+='<tr><td><b>'+esc(r.asset_name)+'</b></td><td>'+esc(r.equipment_type)+'</td><td>'+esc(r.tranche)+'</td><td>'+esc(r.discipline)+'</td><td>'+esc(r.systems)+'</td><td>'+esc(r.equipment_supplier)+'</td>'+['L1','L2','L3','L4','L5'].map(k=>'<td class="num">'+clPctCell(r[k+'_completion_pct'])+'</td>').join('')+'<td class="num"><b>'+clPctCell(r.overall_completion_pct)+'</b></td></tr>';});
   document.getElementById('clTable').innerHTML=h+'</tbody>';document.getElementById('clTableMeta').textContent=fmtInt(rows.length)+' equipment in scope · snapshot '+(slice[0]?.snapshot_date||'—');document.getElementById('clPageInfo').textContent='Page '+(s.page+1)+' of '+pages;document.getElementById('clPrev').disabled=s.page<=0;document.getElementById('clNext').disabled=s.page>=pages-1;
 }
-function clRefresh(){clApplyFilters();clRenderKPIs();clRenderTypeChart();clRenderTrend();clRenderTable();}
+function clRefresh(){clApplyFilters();clRenderKPIs();clRenderHeatmap();clRenderRankChart();clRenderTrend();clRenderTable();}
 async function loadChecklistData(){
   try{const [a,b]=await Promise.all([fetch(CHECKLIST_DATA.currentUrl,{cache:'no-store'}),fetch(CHECKLIST_DATA.dailyUrl,{cache:'no-store'})]);if(!a.ok)throw new Error('Checklist snapshot HTTP '+a.status);if(!b.ok)throw new Error('Checklist trend HTTP '+b.status);const parse=t=>new Promise((resolve,reject)=>Papa.parse(t,{header:true,skipEmptyLines:'greedy',complete:r=>resolve(r.data),error:reject}));checklistState.current=await parse(await a.text());checklistState.daily=await parse(await b.text());clBuildFilters();clRefresh();}catch(err){console.error(err);document.getElementById('clTable').innerHTML='<tbody><tr><td class="empty">Checklist data failed to load: '+esc(err.message||err)+'</td></tr></tbody>';}
 }
