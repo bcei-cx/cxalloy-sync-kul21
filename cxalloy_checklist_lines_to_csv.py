@@ -16,6 +16,12 @@ Outputs:
 This avoids storing a new 100k-line raw snapshot every week while preserving
 exactly the trend grain needed by the dashboard.
 
+CxAlloy API safeguards:
+  - Maximum page size is 500 records, requested explicitly on paged calls.
+  - API-key limit is 10,000 requests/hour. This script deliberately caps
+    itself at 7,500 requests/hour to leave headroom for the equipment and
+    checklist-header requests made by the same workflow/API key.
+
 Required environment variables:
   CXALLOY_IDENTIFIER
   CXALLOY_SECRET
@@ -47,6 +53,13 @@ CURRENT_PROGRESS_PATH = "data/checklist_progress_current.csv"
 HISTORY_PROGRESS_PATH = "data/checklist_progress_history.csv"
 PER_PAGE = 500
 MYT = ZoneInfo("Asia/Kuala_Lumpur")
+
+# CxAlloy documents a maximum of 10,000 requests/hour per API key. Keep this
+# script below that ceiling so the equipment/checklist syncs have headroom.
+SAFE_REQUESTS_PER_HOUR = 7500
+MIN_REQUEST_INTERVAL = 3600.0 / SAFE_REQUESTS_PER_HOUR
+_last_request_started = 0.0
+_request_count = 0
 
 RAW_FIELDS = [
     "project_id", "line_id", "line_number", "description", "answer", "value",
@@ -81,6 +94,17 @@ PROGRESS_FIELDS = [
 ]
 
 
+def throttle_request_rate():
+    """Space requests so this script stays safely below the API-key ceiling."""
+    global _last_request_started, _request_count
+    now = time.monotonic()
+    elapsed = now - _last_request_started
+    if _last_request_started and elapsed < MIN_REQUEST_INTERVAL:
+        time.sleep(MIN_REQUEST_INTERVAL - elapsed)
+    _last_request_started = time.monotonic()
+    _request_count += 1
+
+
 def get_headers() -> dict:
     timestamp = int(time.time())
     signature = hmac.new(
@@ -113,10 +137,12 @@ def post_headers(body_str: str) -> dict:
     }
 
 
-def request_with_retry(method, url, *, headers, max_attempts=5, **kwargs):
-    """Retry throttling and temporary server/network failures conservatively."""
+def request_with_retry(method, url, *, headers_factory, max_attempts=5, **kwargs):
+    """Rate-limit every HTTP attempt and retry temporary failures safely."""
     for attempt in range(1, max_attempts + 1):
         try:
+            throttle_request_rate()
+            headers = headers_factory()
             response = requests.request(method, url, headers=headers, **kwargs)
             if response.status_code == 429 or 500 <= response.status_code < 600:
                 if attempt == max_attempts:
@@ -146,7 +172,7 @@ def get_checklists(project_id: str) -> list:
         response = request_with_retry(
             "POST",
             f"{CXALLOY_BASE_URL}/checklist",
-            headers=post_headers(body_str),
+            headers_factory=lambda body_str=body_str: post_headers(body_str),
             data=body_str,
             timeout=60,
         )
@@ -166,12 +192,13 @@ def get_lines(project_id: str, checklist_id) -> list:
         response = request_with_retry(
             "GET",
             f"{CXALLOY_BASE_URL}/checklistline",
-            headers=get_headers(),
+            headers_factory=get_headers,
             params={
                 "project_id": project_id,
                 "checklist_id": checklist_id,
                 "include": "issues",
                 "page": page,
+                "perpage": PER_PAGE,
             },
             timeout=60,
         )
@@ -233,20 +260,14 @@ def has_value(value) -> bool:
 
 
 def is_actionable_line(row: dict) -> bool:
-    """
-    Headers are excluded from checklist completion. Other line types remain in
-    scope until the real KUL21 export proves that additional instruction-only
-    types should also be excluded.
-    """
+    """Exclude checklist headers from the completion denominator."""
     return not bool(row.get("is_header"))
 
 
 def is_completed_line(row: dict) -> bool:
     """
-    A checklist line counts as completed once it has a response in answer,
-    value or attribute_value. Responses such as N/A count as completed because
-    they represent an explicit checklist disposition rather than an unanswered
-    line.
+    Count a line as completed once it has a response in answer, value or
+    attribute_value. Explicit N/A is therefore treated as a completed response.
     """
     return any(has_value(row.get(field)) for field in ("answer", "value", "attribute_value"))
 
@@ -331,6 +352,10 @@ def main():
 
     print(f"Projects to sync: {CXALLOY_PROJECT_IDS}")
     print(f"Trend snapshot: {snapshot_date} (week starting {week_start}, MYT)")
+    print(
+        f"API safeguard: max {SAFE_REQUESTS_PER_HOUR} requests/hour from this script "
+        f"({MIN_REQUEST_INTERVAL:.3f}s minimum interval), page size {PER_PAGE}"
+    )
     rows = []
 
     for project_id in CXALLOY_PROJECT_IDS:
@@ -401,9 +426,11 @@ def main():
                 rows.append(row)
 
             if index % 100 == 0:
-                print(f"  processed {index}/{len(checklists)} checklists; {len(rows)} lines so far")
+                print(
+                    f"  processed {index}/{len(checklists)} checklists; "
+                    f"{len(rows)} lines; {_request_count} API requests"
+                )
 
-    # Current raw detail is replaced, never appended.
     write_csv(RAW_OUTPUT_PATH, RAW_FIELDS, rows)
     print(f"Wrote {len(rows)} current checklist line rows to {RAW_OUTPUT_PATH}")
 
@@ -411,7 +438,6 @@ def main():
     write_csv(CURRENT_PROGRESS_PATH, PROGRESS_FIELDS, current_progress)
     print(f"Wrote {len(current_progress)} equipment-level progress rows to {CURRENT_PROGRESS_PATH}")
 
-    # Preserve previous weeks; refresh only the current week's snapshot.
     existing_history = read_existing_history()
     prior_weeks = [r for r in existing_history if r.get("week_start") != week_start]
     history = prior_weeks + current_progress
@@ -426,6 +452,7 @@ def main():
         f"Wrote {len(history)} historical progress rows to {HISTORY_PROGRESS_PATH} "
         f"({len(prior_weeks)} prior-week rows preserved; current week refreshed)"
     )
+    print(f"Checklist-line sync completed using {_request_count} API requests")
 
 
 if __name__ == "__main__":
