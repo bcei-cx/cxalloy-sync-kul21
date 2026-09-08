@@ -8,8 +8,11 @@ on:
       - 'patch_checklist_multiselect.py'
       - '.github/workflows/cxalloy_sync.yml'
   schedule:
-    # Runs daily at 18:00 UTC = 2:00 AM Malaysia Time (MYT, UTC+8, no DST).
+    # Daily at 18:00 UTC = 2:00 AM Malaysia Time (MYT, UTC+8).
     - cron: '0 18 * * *'
+    # Weekly cutoff: Sunday 15:55 UTC = Sunday 11:55 PM Malaysia Time.
+    # This captures the final Monday-Sunday state before Monday starts a new week.
+    - cron: '55 15 * * 0'
   workflow_dispatch: {}
 
 permissions:
@@ -57,7 +60,7 @@ jobs:
       - name: Build hosted dashboard
         run: python build_dashboard.py
 
-      - name: Enable multi-select filters on checklist page
+      - name: Enable checklist multi-select and weekly comparison
         run: python patch_checklist_multiselect.py
 
       - name: Commit updated data and dashboard back to repo
