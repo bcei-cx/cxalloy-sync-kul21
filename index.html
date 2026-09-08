@@ -2178,7 +2178,7 @@ function wireChecklistPage(){
 
 
 
-/* ======================================== CHECKLIST MULTI-SELECT + WEEKLY */
+/* ============================== CHECKLIST MULTI-SELECT + WEEKLY + DRILLDOWN */
 const clMulti={levels:new Set(),types:new Set(),tranches:new Set(),disciplines:new Set(),systems:new Set(),suppliers:new Set()};
 const clMultiDefs=[
   {id:'clLevel',key:'levels',label:'Cx Level',field:null,values:['L1','L2','L3','L4','L5']},
@@ -2281,12 +2281,49 @@ function clRenderRankChart(){
   upsert('checklistRank',{type:'bar',data:{labels:ranked.map(x=>x.type),datasets:[{label:label+' completion',data:ranked.map(x=>x.p),backgroundColor:cssVar('--accent')}]},options:{indexAxis:'y',plugins:{legend:{display:false},tooltip:{callbacks:{label:c=>c.parsed.x.toFixed(1)+'% complete'}}},scales:{x:{beginAtZero:true,max:100,grid:{color:gridColor()},ticks:{callback:v=>v+'%'},title:{display:true,text:'Completion percentage'}},y:{grid:{display:false},ticks:{autoSkip:false}}}}});
 }
 
+function clRenderTable(){
+  const s=checklistState,rows=s.filtered.slice().sort((a,b)=>txtValue(a.asset_name).localeCompare(txtValue(b.asset_name),undefined,{numeric:true}));
+  const pages=Math.max(1,Math.ceil(rows.length/s.pageSize));if(s.page>=pages)s.page=pages-1;const slice=rows.slice(s.page*s.pageSize,(s.page+1)*s.pageSize);
+  let h='<thead><tr><th>ELI</th><th>Equipment Type</th><th>Tranche</th><th>Discipline</th><th>System</th><th>Equipment Supplier</th><th class="num">L1</th><th class="num">L2</th><th class="num">L3</th><th class="num">L4</th><th class="num">L5</th><th class="num">Overall</th></tr></thead><tbody>';
+  if(!slice.length)h+='<tr><td colspan="12" class="empty">No equipment matches the current checklist filters.</td></tr>';
+  slice.forEach((r,i)=>{
+    h+='<tr><td><button type="button" class="sm cl-eq-history" data-row="'+i+'" style="font-weight:650;padding:2px 6px">'+esc(r.asset_name)+'</button></td><td>'+esc(r.equipment_type)+'</td><td>'+esc(r.tranche)+'</td><td>'+esc(r.discipline)+'</td><td>'+esc(r.systems)+'</td><td>'+esc(r.equipment_supplier)+'</td>'+['L1','L2','L3','L4','L5'].map(k=>'<td class="num">'+clPctCell(r[k+'_completion_pct'])+'</td>').join('')+'<td class="num"><b>'+clPctCell(r.overall_completion_pct)+'</b></td></tr>';
+  });
+  document.getElementById('clTable').innerHTML=h+'</tbody>';
+  document.getElementById('clTableMeta').textContent=fmtInt(rows.length)+' equipment in scope · click an ELI to view progress history';
+  document.getElementById('clPageInfo').textContent='Page '+(s.page+1)+' of '+pages;document.getElementById('clPrev').disabled=s.page<=0;document.getElementById('clNext').disabled=s.page>=pages-1;
+  document.querySelectorAll('.cl-eq-history').forEach(btn=>btn.onclick=()=>clShowEquipmentHistory(slice[Number(btn.dataset.row)]));
+}
+function clEnsureEquipmentHistoryCard(){
+  let card=document.getElementById('clEqHistoryCard');if(card)return card;
+  const tableCard=document.getElementById('clTable').closest('.card');
+  tableCard.insertAdjacentHTML('afterend','<div class="card c12" id="clEqHistoryCard" style="display:none"><div class="card-head"><div><h3 id="clEqHistoryTitle">Equipment checklist progress history</h3><div class="sub" id="clEqHistorySub">Daily change points · unchanged days are carried forward</div></div><button type="button" class="sm" id="clEqHistoryClose">Close</button></div><div class="chart-box sm" style="height:300px"><canvas id="checklistEqHistory"></canvas></div></div>');
+  card=document.getElementById('clEqHistoryCard');document.getElementById('clEqHistoryClose').onclick=()=>card.style.display='none';return card;
+}
+function clShowEquipmentHistory(r){
+  if(!r)return;const card=clEnsureEquipmentHistoryCard(),pid=txtValue(r.project_id),key=txtValue(r.asset_key||r.asset_name);
+  const points=(checklistState.eqChanges||[]).filter(x=>txtValue(x.project_id)===pid&&txtValue(x.asset_key||x.asset_name)===key).sort((a,b)=>txtValue(a.snapshot_date).localeCompare(txtValue(b.snapshot_date)));
+  card.style.display='block';document.getElementById('clEqHistoryTitle').textContent=txtValue(r.asset_name)+' · checklist progress history';
+  document.getElementById('clEqHistorySub').textContent=txtValue(r.equipment_type)+' · '+txtValue(r.tranche)+' · daily change points; unchanged days carried forward';
+  if(!points.length){upsert('checklistEqHistory',{type:'line',data:{labels:[],datasets:[]},options:{scales:{y:{beginAtZero:true,max:100}}}});card.scrollIntoView({behavior:'smooth',block:'center'});return;}
+  const dates=uniqSorted(points.map(x=>txtValue(x.snapshot_date)).filter(Boolean));
+  const datasets=LEVELS.map(l=>{
+    const by=new Map(points.filter(x=>txtValue(x.commissioning_level)===l.k).map(x=>[txtValue(x.snapshot_date),clNum(x.completion_pct)]));
+    let last=null;const data=dates.map(d=>{if(by.has(d))last=by.get(d);return last;});
+    return {label:l.k,data,borderColor:cssVar(l.varc),backgroundColor:cssVar(l.varc),borderWidth:2,pointRadius:2,tension:0,stepped:true,spanGaps:true};
+  }).filter(ds=>ds.data.some(v=>v!==null));
+  upsert('checklistEqHistory',{type:'line',data:{labels:dates,datasets},options:{plugins:{tooltip:{callbacks:{label:c=>c.dataset.label+': '+(c.parsed.y==null?'—':c.parsed.y.toFixed(1)+'%')}}},scales:{x:{grid:{display:false}},y:{beginAtZero:true,max:100,grid:{color:gridColor()},ticks:{callback:v=>v+'%'},title:{display:true,text:'Completion percentage'}}}}});
+  card.scrollIntoView({behavior:'smooth',block:'center'});
+}
+
 async function loadChecklistData(){
   try{
-    const [a,b,c]=await Promise.all([
+    const [a,b,c,d,e]=await Promise.all([
       fetch('./data/checklist_completion_by_equipment.csv',{cache:'no-store'}),
       fetch('./data/checklist_progress_daily.csv',{cache:'no-store'}),
-      fetch('./data/checklist_progress_history.csv',{cache:'no-store'})
+      fetch('./data/checklist_progress_history.csv',{cache:'no-store'}),
+      fetch('./data/checklist_progress_daily_type.csv',{cache:'no-store'}),
+      fetch('./data/checklist_progress_equipment_changes.csv',{cache:'no-store'})
     ]);
     if(!a.ok)throw new Error('Checklist snapshot HTTP '+a.status);
     if(!b.ok)throw new Error('Checklist trend HTTP '+b.status);
@@ -2295,6 +2332,8 @@ async function loadChecklistData(){
     checklistState.current=await parse(await a.text());
     checklistState.daily=await parse(await b.text());
     checklistState.history=await parse(await c.text());
+    checklistState.dailyType=d.ok?await parse(await d.text()):[];
+    checklistState.eqChanges=e.ok?await parse(await e.text()):[];
     clBuildFilters();clRefresh();
   }catch(err){console.error(err);document.getElementById('clTable').innerHTML='<tbody><tr><td class="empty">Checklist data failed to load: '+esc(err.message||err)+'</td></tr></tbody>';}
 }
