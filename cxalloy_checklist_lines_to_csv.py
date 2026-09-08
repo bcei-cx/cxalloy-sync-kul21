@@ -1,26 +1,22 @@
 """
-CxAlloy checklist lines -> current detail + compact trend snapshots.
+CxAlloy checklist progress sync.
+
+This script deliberately does NOT persist individual checklist lines.
+CxAlloy returns checklist records in pages of up to 500 and can include the
+related line data in the same POST /checklist response. The line data is
+processed in memory inside GitHub Actions and reduced to compact progress CSVs.
 
 Outputs:
-  data/checklist_lines.csv
-      Current line-level state only. Replaced on every sync.
-
   data/checklist_progress_current.csv
-      Current completion aggregated to equipment x commissioning level.
+      Current completion by equipment x commissioning level.
+
+  data/checklist_progress_daily.csv
+      Daily project-level trend, Overall + L1-L5. This is the lightweight
+      time-series file the HTML dashboard should use for daily/weekly charts.
 
   data/checklist_progress_history.csv
-      Weekly equipment x commissioning level snapshots. During the current
-      week, that week's rows are replaced on every daily sync. Once a new
-      week starts, the previous week's rows remain as the historical point.
-
-This avoids storing a new 100k-line raw snapshot every week while preserving
-exactly the trend grain needed by the dashboard.
-
-CxAlloy API safeguards:
-  - Maximum page size is 500 records, requested explicitly on paged calls.
-  - API-key limit is 10,000 requests/hour. This script deliberately caps
-    itself at 7,500 requests/hour to leave headroom for the equipment and
-    checklist-header requests made by the same workflow/API key.
+      Weekly equipment x commissioning level snapshots. The current week's
+      rows are refreshed on each run; previous weeks are retained.
 
 Required environment variables:
   CXALLOY_IDENTIFIER
@@ -48,33 +44,20 @@ CXALLOY_PROJECT_IDS = [
 ]
 
 CXALLOY_BASE_URL = "https://tq.cxalloy.com/api/v1"
-RAW_OUTPUT_PATH = "data/checklist_lines.csv"
 CURRENT_PROGRESS_PATH = "data/checklist_progress_current.csv"
-HISTORY_PROGRESS_PATH = "data/checklist_progress_history.csv"
+DAILY_PROGRESS_PATH = "data/checklist_progress_daily.csv"
+WEEKLY_HISTORY_PATH = "data/checklist_progress_history.csv"
 PER_PAGE = 500
 MYT = ZoneInfo("Asia/Kuala_Lumpur")
 
-# CxAlloy documents a maximum of 10,000 requests/hour per API key. Keep this
-# script below that ceiling so the equipment/checklist syncs have headroom.
+# Well below CxAlloy's 10,000 requests/hour API-key ceiling. With bulk checklist
+# pagination this script should normally use only tens of requests, not thousands.
 SAFE_REQUESTS_PER_HOUR = 7500
 MIN_REQUEST_INTERVAL = 3600.0 / SAFE_REQUESTS_PER_HOUR
 _last_request_started = 0.0
 _request_count = 0
 
-RAW_FIELDS = [
-    "project_id", "line_id", "line_number", "description", "answer", "value",
-    "line_note", "is_header", "is_bold", "is_italic", "is_indented",
-    "attribute_id", "attribute_name", "attribute_value", "attribute_unit",
-    "type", "line_created_by", "line_datetime_created", "line_datetime_modified",
-    "issues", "issue_count", "checklist_id", "checklist_name", "checklist_number",
-    "checklist_type", "checklist_note", "checklist_tools", "asset_name",
-    "asset_type", "asset_key", "checklist_status", "assigned_name",
-    "assigned_type", "assigned_key", "checklist_created_by",
-    "checklist_datetime_created", "checklist_datetime_modified",
-    "commissioning_level", "checklist_link", "last_synced",
-]
-
-PROGRESS_FIELDS = [
+CURRENT_FIELDS = [
     "snapshot_date",
     "week_start",
     "project_id",
@@ -89,13 +72,25 @@ PROGRESS_FIELDS = [
     "completed_lines",
     "open_lines",
     "completion_pct",
-    "issue_count",
+    "last_synced",
+]
+
+DAILY_FIELDS = [
+    "snapshot_date",
+    "week_start",
+    "project_id",
+    "commissioning_level",
+    "equipment_count",
+    "checklist_count",
+    "total_lines",
+    "completed_lines",
+    "open_lines",
+    "completion_pct",
     "last_synced",
 ]
 
 
 def throttle_request_rate():
-    """Space requests so this script stays safely below the API-key ceiling."""
     global _last_request_started, _request_count
     now = time.monotonic()
     elapsed = now - _last_request_started
@@ -103,22 +98,6 @@ def throttle_request_rate():
         time.sleep(MIN_REQUEST_INTERVAL - elapsed)
     _last_request_started = time.monotonic()
     _request_count += 1
-
-
-def get_headers() -> dict:
-    timestamp = int(time.time())
-    signature = hmac.new(
-        CXALLOY_SECRET.encode("utf-8"),
-        str(timestamp).encode("utf-8"),
-        hashlib.sha256,
-    ).hexdigest()
-    return {
-        "Content-Type": "application/json",
-        "cxalloy-identifier": CXALLOY_IDENTIFIER,
-        "cxalloy-signature": signature,
-        "cxalloy-timestamp": str(timestamp),
-        "user-agent": "GitHubActions-CxAlloySync/1.0",
-    }
 
 
 def post_headers(body_str: str) -> dict:
@@ -137,13 +116,18 @@ def post_headers(body_str: str) -> dict:
     }
 
 
-def request_with_retry(method, url, *, headers_factory, max_attempts=5, **kwargs):
-    """Rate-limit every HTTP attempt and retry temporary failures safely."""
+def post_json_with_retry(url: str, body: dict, max_attempts: int = 5):
+    """POST signed JSON with throttling and conservative retries."""
+    body_str = json.dumps(body, separators=(",", ":"))
     for attempt in range(1, max_attempts + 1):
         try:
             throttle_request_rate()
-            headers = headers_factory()
-            response = requests.request(method, url, headers=headers, **kwargs)
+            response = requests.post(
+                url,
+                headers=post_headers(body_str),
+                data=body_str,
+                timeout=120,
+            )
             if response.status_code == 429 or 500 <= response.status_code < 600:
                 if attempt == max_attempts:
                     response.raise_for_status()
@@ -153,7 +137,7 @@ def request_with_retry(method, url, *, headers_factory, max_attempts=5, **kwargs
                 time.sleep(delay)
                 continue
             response.raise_for_status()
-            return response
+            return response.json()
         except (requests.ConnectionError, requests.Timeout):
             if attempt == max_attempts:
                 raise
@@ -163,63 +147,43 @@ def request_with_retry(method, url, *, headers_factory, max_attempts=5, **kwargs
     raise RuntimeError("request retry loop ended unexpectedly")
 
 
-def get_checklists(project_id: str) -> list:
-    records = []
-    page = 1
-    while True:
-        body = {"project_id": int(project_id), "page": page, "perpage": PER_PAGE}
-        body_str = json.dumps(body, separators=(",", ":"))
-        response = request_with_retry(
-            "POST",
-            f"{CXALLOY_BASE_URL}/checklist",
-            headers_factory=lambda body_str=body_str: post_headers(body_str),
-            data=body_str,
-            timeout=60,
-        )
-        payload = response.json()
-        batch = payload.get("records", []) if isinstance(payload, dict) else []
-        records.extend(batch)
-        if len(batch) < PER_PAGE:
-            break
-        page += 1
-    return records
+def fetch_checklist_page(project_id: str, page: int, legacy_mode: bool = False) -> dict:
+    """
+    Fetch one page of up to 500 checklists including line data.
+
+    Upgraded CxAlloy projects support include=["lines"]. Older projects require
+    sections to be included when lines are requested, so the caller can retry
+    with legacy_mode=True if CxAlloy rejects the upgraded-project request.
+    """
+    includes = ["sections", "lines"] if legacy_mode else ["lines"]
+    body = {
+        "project_id": int(project_id),
+        "page": page,
+        "perpage": PER_PAGE,
+        "include": includes,
+    }
+    return post_json_with_retry(f"{CXALLOY_BASE_URL}/checklist", body)
 
 
-def get_lines(project_id: str, checklist_id) -> list:
+def as_list(value):
+    if isinstance(value, list):
+        return value
+    if isinstance(value, dict):
+        for key in ("records", "data", "lines", "sections"):
+            if isinstance(value.get(key), list):
+                return value[key]
+    return []
+
+
+def lines_from_checklist(checklist: dict) -> list:
+    """Support both upgraded checklists and legacy section-based checklists."""
+    direct = as_list(checklist.get("lines"))
+    if direct:
+        return direct
+
     lines = []
-    page = 1
-    while True:
-        response = request_with_retry(
-            "GET",
-            f"{CXALLOY_BASE_URL}/checklistline",
-            headers_factory=get_headers,
-            params={
-                "project_id": project_id,
-                "checklist_id": checklist_id,
-                "include": "issues",
-                "page": page,
-                "perpage": PER_PAGE,
-            },
-            timeout=60,
-        )
-        payload = response.json()
-        if isinstance(payload, list):
-            batch = payload
-        elif isinstance(payload, dict):
-            batch = (
-                payload.get("records")
-                or payload.get("data")
-                or payload.get("checklistlines")
-                or payload.get("checklist_lines")
-                or []
-            )
-        else:
-            batch = []
-
-        lines.extend(batch)
-        if len(batch) < PER_PAGE:
-            break
-        page += 1
+    for section in as_list(checklist.get("sections")):
+        lines.extend(as_list(section.get("lines")))
     return lines
 
 
@@ -231,25 +195,7 @@ def level_from_checklist(checklist: dict) -> str:
     return f"L{match.group(1)}" if match else ""
 
 
-def scalar(value):
-    if value is None:
-        return ""
-    if isinstance(value, (dict, list)):
-        return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
-    return value
-
-
-def issue_count(issues) -> int:
-    if isinstance(issues, list):
-        return len(issues)
-    if isinstance(issues, dict):
-        records = issues.get("records")
-        return len(records) if isinstance(records, list) else (1 if issues else 0)
-    return 0
-
-
 def has_value(value) -> bool:
-    """Blank-safe check; numeric 0 and boolean False still count as responses."""
     if value is None:
         return False
     if isinstance(value, str):
@@ -259,54 +205,111 @@ def has_value(value) -> bool:
     return True
 
 
-def is_actionable_line(row: dict) -> bool:
-    """Exclude checklist headers from the completion denominator."""
-    return not bool(row.get("is_header"))
-
-
-def is_completed_line(row: dict) -> bool:
+def is_actionable_line(line: dict) -> bool:
     """
-    Count a line as completed once it has a response in answer, value or
-    attribute_value. Explicit N/A is therefore treated as a completed response.
+    Exclude structural/display-only rows from the completion denominator.
+    CxAlloy line types 'header' and 'information' do not represent checklist
+    actions to be completed.
     """
-    return any(has_value(row.get(field)) for field in ("answer", "value", "attribute_value"))
+    line_type = str(line.get("type", "") or "").strip().lower()
+    return line_type not in {"header", "information"}
 
 
-def aggregate_progress(rows: list, snapshot_date: str, week_start: str, last_synced: str) -> list:
-    grouped = defaultdict(lambda: {
+def is_completed_line(line: dict) -> bool:
+    """
+    A line is complete once CxAlloy contains an answer or a populated value.
+    Explicit passed/failed/NA responses all count as completed checklist work.
+    """
+    return any(
+        has_value(line.get(field))
+        for field in ("answer", "value", "attribute_value")
+    )
+
+
+def new_bucket():
+    return {
         "asset_name": "",
         "asset_type": "",
         "checklist_ids": set(),
         "checklist_statuses": set(),
         "total_lines": 0,
         "completed_lines": 0,
-        "issue_count": 0,
-    })
+    }
 
-    for row in rows:
-        level = row.get("commissioning_level", "")
-        asset_key = row.get("asset_key", "") or row.get("asset_name", "")
-        if not level or not asset_key or not is_actionable_line(row):
+
+def process_checklist(checklist: dict, project_id: str, grouped: dict):
+    level = level_from_checklist(checklist)
+    asset_name = str(checklist.get("asset_name", "") or "")
+    asset_key = str(checklist.get("asset_key", "") or asset_name)
+    if not level or not asset_key:
+        return
+
+    key = (project_id, asset_key, level)
+    bucket = grouped[key]
+    bucket["asset_name"] = asset_name or bucket["asset_name"]
+    bucket["asset_type"] = str(checklist.get("asset_type", "") or bucket["asset_type"])
+
+    checklist_id = checklist.get("checklist_id") or checklist.get("id")
+    if checklist_id:
+        bucket["checklist_ids"].add(str(checklist_id))
+    if checklist.get("status"):
+        bucket["checklist_statuses"].add(str(checklist["status"]))
+
+    for line in lines_from_checklist(checklist):
+        if not is_actionable_line(line):
             continue
-
-        key = (row.get("project_id", ""), asset_key, level)
-        bucket = grouped[key]
-        bucket["asset_name"] = row.get("asset_name", "") or bucket["asset_name"]
-        bucket["asset_type"] = row.get("asset_type", "") or bucket["asset_type"]
-        if row.get("checklist_id"):
-            bucket["checklist_ids"].add(str(row["checklist_id"]))
-        if row.get("checklist_status"):
-            bucket["checklist_statuses"].add(str(row["checklist_status"]))
         bucket["total_lines"] += 1
-        if is_completed_line(row):
+        if is_completed_line(line):
             bucket["completed_lines"] += 1
-        bucket["issue_count"] += int(row.get("issue_count") or 0)
 
-    result = []
+
+def fetch_and_aggregate_project(project_id: str, grouped: dict):
+    """Bulk-fetch all checklists for one project, 500 checklists per request."""
+    page = 1
+    legacy_mode = False
+    processed = 0
+    reported_total = None
+
+    while True:
+        try:
+            payload = fetch_checklist_page(project_id, page, legacy_mode=legacy_mode)
+        except requests.HTTPError as exc:
+            # CxAlloy documents that legacy projects cannot include lines unless
+            # sections are included too. Retry page 1 once in that mode.
+            if page == 1 and not legacy_mode and exc.response is not None and exc.response.status_code == 400:
+                print("  Project requires legacy checklist sections; retrying with sections + lines")
+                legacy_mode = True
+                continue
+            raise
+
+        records = payload.get("records", []) if isinstance(payload, dict) else []
+        if reported_total is None and isinstance(payload, dict):
+            reported_total = payload.get("total_count")
+            if reported_total is not None:
+                print(f"  CxAlloy reports {reported_total} checklists")
+
+        for checklist in records:
+            process_checklist(checklist, project_id, grouped)
+        processed += len(records)
+
+        print(
+            f"  page {page}: {len(records)} checklists; "
+            f"{processed} processed; {_request_count} API requests"
+        )
+
+        if len(records) < PER_PAGE:
+            break
+        page += 1
+
+    return processed
+
+
+def build_current_rows(grouped: dict, snapshot_date: str, week_start: str, last_synced: str) -> list:
+    rows = []
     for (project_id, asset_key, level), bucket in sorted(grouped.items()):
         total = bucket["total_lines"]
         completed = bucket["completed_lines"]
-        result.append({
+        rows.append({
             "snapshot_date": snapshot_date,
             "week_start": week_start,
             "project_id": project_id,
@@ -320,17 +323,55 @@ def aggregate_progress(rows: list, snapshot_date: str, week_start: str, last_syn
             "total_lines": total,
             "completed_lines": completed,
             "open_lines": total - completed,
-            "completion_pct": round((completed / total * 100), 2) if total else 0,
-            "issue_count": bucket["issue_count"],
+            "completion_pct": round(completed / total * 100, 2) if total else 0,
             "last_synced": last_synced,
         })
-    return result
+    return rows
 
 
-def read_existing_history() -> list:
-    if not os.path.exists(HISTORY_PROGRESS_PATH):
+def build_daily_rows(current_rows: list, snapshot_date: str, week_start: str, last_synced: str) -> list:
+    """Create tiny project trend rows: Overall plus each L1-L5 level."""
+    grouped = defaultdict(lambda: {
+        "equipment": set(),
+        "checklists": 0,
+        "total": 0,
+        "completed": 0,
+    })
+
+    for row in current_rows:
+        project_id = row["project_id"]
+        level = row["commissioning_level"]
+        for trend_level in (level, "Overall"):
+            key = (project_id, trend_level)
+            grouped[key]["equipment"].add(row["asset_key"])
+            grouped[key]["checklists"] += int(row["checklist_count"] or 0)
+            grouped[key]["total"] += int(row["total_lines"] or 0)
+            grouped[key]["completed"] += int(row["completed_lines"] or 0)
+
+    rows = []
+    for (project_id, level), bucket in sorted(grouped.items()):
+        total = bucket["total"]
+        completed = bucket["completed"]
+        rows.append({
+            "snapshot_date": snapshot_date,
+            "week_start": week_start,
+            "project_id": project_id,
+            "commissioning_level": level,
+            "equipment_count": len(bucket["equipment"]),
+            "checklist_count": bucket["checklists"],
+            "total_lines": total,
+            "completed_lines": completed,
+            "open_lines": total - completed,
+            "completion_pct": round(completed / total * 100, 2) if total else 0,
+            "last_synced": last_synced,
+        })
+    return rows
+
+
+def read_csv(path: str) -> list:
+    if not os.path.exists(path):
         return []
-    with open(HISTORY_PROGRESS_PATH, newline="", encoding="utf-8") as handle:
+    with open(path, newline="", encoding="utf-8") as handle:
         return list(csv.DictReader(handle))
 
 
@@ -351,108 +392,50 @@ def main():
     last_synced = now_utc.isoformat()
 
     print(f"Projects to sync: {CXALLOY_PROJECT_IDS}")
-    print(f"Trend snapshot: {snapshot_date} (week starting {week_start}, MYT)")
-    print(
-        f"API safeguard: max {SAFE_REQUESTS_PER_HOUR} requests/hour from this script "
-        f"({MIN_REQUEST_INTERVAL:.3f}s minimum interval), page size {PER_PAGE}"
-    )
-    rows = []
+    print(f"Snapshot date: {snapshot_date}; week starting {week_start} (MYT)")
+    print(f"Bulk checklist page size: {PER_PAGE}")
+
+    grouped = defaultdict(new_bucket)
+    total_checklists = 0
 
     for project_id in CXALLOY_PROJECT_IDS:
-        print(f"Fetching checklists for project {project_id}...")
-        checklists = get_checklists(project_id)
-        print(f"  -> {len(checklists)} checklists")
+        print(f"Fetching project {project_id} checklists with embedded lines...")
+        total_checklists += fetch_and_aggregate_project(project_id, grouped)
 
-        for index, checklist in enumerate(checklists, start=1):
-            checklist_id = checklist.get("checklist_id") or checklist.get("id")
-            if not checklist_id:
-                print("  WARNING: checklist without checklist_id skipped")
-                continue
+    current_rows = build_current_rows(grouped, snapshot_date, week_start, last_synced)
+    write_csv(CURRENT_PROGRESS_PATH, CURRENT_FIELDS, current_rows)
+    print(f"Wrote {len(current_rows)} current equipment x level rows to {CURRENT_PROGRESS_PATH}")
 
-            try:
-                lines = get_lines(project_id, checklist_id)
-            except requests.RequestException as exc:
-                print(f"  WARNING: checklist {checklist_id} line fetch failed: {exc}")
-                continue
+    # Daily project/level trend: replace today's rows if the workflow is rerun.
+    today_rows = build_daily_rows(current_rows, snapshot_date, week_start, last_synced)
+    existing_daily = read_csv(DAILY_PROGRESS_PATH)
+    existing_daily = [r for r in existing_daily if r.get("snapshot_date") != snapshot_date]
+    daily_history = existing_daily + today_rows
+    daily_history.sort(key=lambda r: (
+        r.get("snapshot_date", ""),
+        r.get("project_id", ""),
+        r.get("commissioning_level", ""),
+    ))
+    write_csv(DAILY_PROGRESS_PATH, DAILY_FIELDS, daily_history)
+    print(f"Wrote {len(daily_history)} daily trend rows to {DAILY_PROGRESS_PATH}")
 
-            level = level_from_checklist(checklist)
-            for line in lines:
-                issues = line.get("issues", [])
-                configuration = line.get("configuration") or {}
-                fmt = configuration.get("format", {}) if isinstance(configuration, dict) else {}
-
-                row = {
-                    "project_id": project_id,
-                    "line_id": line.get("checklistline_id", line.get("line_id", line.get("id", ""))),
-                    "line_number": line.get("line_number", ""),
-                    "description": line.get("description", ""),
-                    "answer": line.get("answer", ""),
-                    "value": scalar(line.get("value", "")),
-                    "line_note": line.get("note", line.get("line_note", "")),
-                    "is_header": 1 if str(line.get("type", "")).lower() == "header" else 0,
-                    "is_bold": fmt.get("bold", line.get("is_bold", "")),
-                    "is_italic": fmt.get("italic", line.get("is_italic", "")),
-                    "is_indented": fmt.get("indented", line.get("is_indented", "")),
-                    "attribute_id": line.get("attribute_id", line.get("fk_attribute", "")),
-                    "attribute_name": line.get("attribute", line.get("attribute_name", "")),
-                    "attribute_value": line.get("attribute_value", ""),
-                    "attribute_unit": line.get("attribute_unit", ""),
-                    "type": line.get("type", ""),
-                    "line_created_by": line.get("created_by", line.get("line_created_by", "")),
-                    "line_datetime_created": line.get("datetime_created", line.get("date_created", "")),
-                    "line_datetime_modified": line.get("datetime_modified", line.get("date_modified", "")),
-                    "issues": scalar(issues),
-                    "issue_count": issue_count(issues),
-                    "checklist_id": checklist_id,
-                    "checklist_name": checklist.get("name", ""),
-                    "checklist_number": checklist.get("number", ""),
-                    "checklist_type": checklist.get("type_name", checklist.get("type", "")),
-                    "checklist_note": checklist.get("note", ""),
-                    "checklist_tools": checklist.get("tools", ""),
-                    "asset_name": checklist.get("asset_name", ""),
-                    "asset_type": checklist.get("asset_type", ""),
-                    "asset_key": checklist.get("asset_key", ""),
-                    "checklist_status": checklist.get("status", ""),
-                    "assigned_name": checklist.get("assigned_name", ""),
-                    "assigned_type": checklist.get("assigned_type", ""),
-                    "assigned_key": checklist.get("assigned_key", ""),
-                    "checklist_created_by": checklist.get("created_by", ""),
-                    "checklist_datetime_created": checklist.get("datetime_created", checklist.get("date_created", "")),
-                    "checklist_datetime_modified": checklist.get("datetime_modified", checklist.get("date_modified", "")),
-                    "commissioning_level": level,
-                    "checklist_link": f"https://tq.cxalloy.com/project/{project_id}/checklists/{checklist_id}",
-                    "last_synced": last_synced,
-                }
-                rows.append(row)
-
-            if index % 100 == 0:
-                print(
-                    f"  processed {index}/{len(checklists)} checklists; "
-                    f"{len(rows)} lines; {_request_count} API requests"
-                )
-
-    write_csv(RAW_OUTPUT_PATH, RAW_FIELDS, rows)
-    print(f"Wrote {len(rows)} current checklist line rows to {RAW_OUTPUT_PATH}")
-
-    current_progress = aggregate_progress(rows, snapshot_date, week_start, last_synced)
-    write_csv(CURRENT_PROGRESS_PATH, PROGRESS_FIELDS, current_progress)
-    print(f"Wrote {len(current_progress)} equipment-level progress rows to {CURRENT_PROGRESS_PATH}")
-
-    existing_history = read_existing_history()
-    prior_weeks = [r for r in existing_history if r.get("week_start") != week_start]
-    history = prior_weeks + current_progress
-    history.sort(key=lambda r: (
+    # Weekly equipment x level history: refresh only this week's point.
+    existing_weekly = read_csv(WEEKLY_HISTORY_PATH)
+    prior_weeks = [r for r in existing_weekly if r.get("week_start") != week_start]
+    weekly_history = prior_weeks + current_rows
+    weekly_history.sort(key=lambda r: (
         r.get("week_start", ""),
         r.get("project_id", ""),
         r.get("asset_key", ""),
         r.get("commissioning_level", ""),
     ))
-    write_csv(HISTORY_PROGRESS_PATH, PROGRESS_FIELDS, history)
+    write_csv(WEEKLY_HISTORY_PATH, CURRENT_FIELDS, weekly_history)
+    print(f"Wrote {len(weekly_history)} weekly equipment history rows to {WEEKLY_HISTORY_PATH}")
+
     print(
-        f"Wrote {len(history)} historical progress rows to {HISTORY_PROGRESS_PATH} "
-        f"({len(prior_weeks)} prior-week rows preserved; current week refreshed)"
+        f"Completed: {total_checklists} checklists processed using {_request_count} API requests. "
+        "Individual checklist lines were processed in memory and were not written to GitHub."
     )
-    print(f"Checklist-line sync completed using {_request_count} API requests")
 
 
 if __name__ == "__main__":
