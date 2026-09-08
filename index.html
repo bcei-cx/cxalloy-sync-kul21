@@ -1,0 +1,2288 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light" data-palette="normal">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Commissioning Progress Dashboard</title>
+
+<!-- CDN dependencies: SheetJS (.xlsx), PapaParse (.csv), Chart.js (charts) -->
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+
+<style>
+/* ============================================================
+   DESIGN TOKENS
+   ============================================================ */
+:root{
+  --bg:#F7F8FA; --card:#FFFFFF; --ink:#111827; --ink-2:#374151; --muted:#6B7280;
+  --line:#E5E7EB; --line-2:#EEF0F3; --shadow:0 1px 2px rgba(16,24,40,.04),0 4px 12px rgba(16,24,40,.06);
+  --accent:#2D7FF9; --radius:12px;
+  --tag-red:#E23B3B; --tag-yellow:#F2B705; --tag-green:#21A366; --tag-blue:#2D7FF9; --tag-white:#E9ECF1;
+  --st-overdue:#C62828; --st-pending:#6B7280; --st-late:#F57C00; --st-hit:#21A366; --st-skip:#9CA3AF;
+  --heat-red:#FDE7E7; --heat-amber:#FEF3D6; --heat-green:#E3F5EC;
+}
+[data-palette="cb"]{ /* Okabe–Ito colour-blind-safe substitutes */
+  --tag-red:#D55E00; --tag-yellow:#E69F00; --tag-green:#009E73; --tag-blue:#0072B2; --tag-white:#F0F0F0;
+  --st-overdue:#D55E00; --st-late:#E69F00; --st-hit:#009E73; --st-pending:#56606E;
+}
+[data-theme="dark"]{
+  --bg:#0F1319; --card:#161B22; --ink:#E6EAF0; --ink-2:#C3CAD4; --muted:#8B94A3;
+  --line:#252C36; --line-2:#1D242D; --shadow:0 1px 2px rgba(0,0,0,.4);
+  --heat-red:#3A1F1F; --heat-amber:#3A3018; --heat-green:#12301F; --tag-white:#4A5260;
+}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0}
+body{
+  background:var(--bg); color:var(--ink); font-size:13px; line-height:1.45;
+  font-family:Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  -webkit-font-smoothing:antialiased;
+}
+.wrap{max-width:1680px;margin:0 auto;padding:0 20px 64px}
+
+/* Multi-page dashboard navigation */
+.page-nav{position:sticky;top:0;z-index:90;display:flex;gap:4px;align-items:center;flex-wrap:wrap;padding:8px 10px;margin:0 0 16px;background:var(--card);border:1px solid var(--line);border-radius:10px;box-shadow:var(--shadow)}
+.page-nav button{border:none;background:transparent;color:var(--muted);padding:7px 12px;border-radius:7px;font-weight:600}
+.page-nav button:hover{background:var(--line-2);color:var(--ink)}
+.page-nav button.on{background:var(--accent);color:#fff}
+.page{display:none}
+.page.on{display:block}
+@media print{
+  .page-nav{display:none !important}
+  .page{display:block !important}
+  .page-title{page-break-before:always}
+  .page:first-child .page-title{page-break-before:auto}
+}
+.grid{display:grid;grid-template-columns:repeat(12,1fr);gap:16px}
+.c4{grid-column:span 4}.c6{grid-column:span 6}.c8{grid-column:span 8}.c12{grid-column:span 12}
+@media(max-width:1180px){.c4,.c6,.c8{grid-column:span 12}}
+
+/* Cards */
+.card{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow);padding:16px;transition:background .2s,border-color .2s}
+.card h3{margin:0 0 2px;font-size:13.5px;font-weight:600;letter-spacing:-.1px}
+.card .sub{color:var(--muted);font-size:11.5px;margin-bottom:12px}
+.card-head{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;margin-bottom:10px;flex-wrap:wrap}
+
+/* Header */
+header.app{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:18px 0 14px;flex-wrap:wrap}
+.title{font-size:19px;font-weight:650;letter-spacing:-.3px;margin:0}
+.title small{display:block;font-size:11.5px;font-weight:400;color:var(--muted);letter-spacing:0;margin-top:3px}
+.hdr-tools{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+
+/* Controls */
+button,.btn{font:inherit;cursor:pointer;border:1px solid var(--line);background:var(--card);color:var(--ink-2);
+  padding:6px 11px;border-radius:8px;transition:all .2s}
+button:hover,.btn:hover{border-color:var(--accent);color:var(--accent)}
+button.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+button.primary:hover{filter:brightness(1.07);color:#fff}
+button.sm{padding:3px 8px;font-size:11.5px}
+input,select{font:inherit;background:var(--card);color:var(--ink);border:1px solid var(--line);border-radius:8px;padding:5px 8px;transition:border-color .2s}
+input:focus,select:focus{outline:none;border-color:var(--accent)}
+label.fld{display:flex;flex-direction:column;gap:3px;font-size:10.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.4px}
+
+/* Filter bar */
+.filterbar{position:sticky;top:0;z-index:60;background:var(--card);border:1px solid var(--line);
+  border-radius:var(--radius);box-shadow:var(--shadow);padding:10px 12px;margin-bottom:16px}
+.filter-row{display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end}
+.ms{position:relative}
+.ms>button{display:flex;align-items:center;gap:6px;min-width:118px;justify-content:space-between;white-space:nowrap}
+.ms>button .n{background:var(--accent);color:#fff;border-radius:999px;padding:0 6px;font-size:10.5px;line-height:16px}
+.ms-panel{display:none;position:absolute;z-index:80;top:calc(100% + 4px);left:0;width:250px;max-height:300px;overflow:auto;
+  background:var(--card);border:1px solid var(--line);border-radius:10px;box-shadow:0 8px 28px rgba(16,24,40,.16);padding:8px}
+.ms.open .ms-panel{display:block}
+.ms-panel input.search{width:100%;margin-bottom:6px}
+.ms-panel .opt{display:flex;align-items:center;gap:7px;padding:4px 5px;border-radius:6px;cursor:pointer;font-size:12px}
+.ms-panel .opt:hover{background:var(--line-2)}
+.ms-panel .opt .cnt{margin-left:auto;color:var(--muted);font-size:11px}
+.ms-actions{display:flex;gap:6px;margin-bottom:6px}
+.chips{display:flex;gap:6px;flex-wrap:wrap;margin-top:9px}
+.chip{display:inline-flex;align-items:center;gap:6px;background:var(--line-2);border:1px solid var(--line);
+  border-radius:999px;padding:2px 6px 2px 9px;font-size:11.5px;color:var(--ink-2)}
+.chip b{font-weight:600}
+.chip span{cursor:pointer;color:var(--muted);font-size:13px;line-height:1}
+.chip span:hover{color:var(--st-overdue)}
+
+/* KPI */
+.kpis{display:grid;grid-template-columns:repeat(auto-fill,minmax(196px,1fr));gap:12px;margin-bottom:16px}
+.kpi{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow);
+  padding:12px 13px;cursor:pointer;transition:transform .2s,border-color .2s}
+.kpi:hover{transform:translateY(-1px);border-color:var(--accent)}
+.kpi.active{border-color:var(--accent);box-shadow:0 0 0 2px rgba(45,127,249,.14)}
+.kpi .k-label{font-size:10.5px;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);margin-bottom:5px}
+.kpi .k-val{font-size:25px;font-weight:640;letter-spacing:-.8px;font-variant-numeric:tabular-nums;line-height:1.1}
+.kpi .k-val small{font-size:13px;font-weight:500;color:var(--muted);letter-spacing:0}
+.kpi .k-sub{font-size:11px;color:var(--muted);margin-top:4px;font-variant-numeric:tabular-nums}
+.bar{height:5px;border-radius:3px;background:var(--line-2);overflow:hidden;margin-top:8px}
+.bar>i{display:block;height:100%;border-radius:3px;transition:width .25s}
+.delta{font-weight:600}.delta.up{color:var(--st-hit)}.delta.down{color:var(--st-overdue)}
+
+/* Insights */
+.ins{display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:10px}
+.ins-item{display:flex;gap:9px;align-items:flex-start;padding:9px 10px;border:1px solid var(--line);border-radius:9px;background:var(--card)}
+.sev{flex:none;font-size:9.5px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;padding:2px 6px;border-radius:5px;margin-top:1px}
+.sev.critical{background:var(--st-overdue);color:#fff}
+.sev.watch{background:var(--st-late);color:#fff}
+.sev.positive{background:var(--st-hit);color:#fff}
+.sev.data{background:var(--st-pending);color:#fff}
+
+/* Tables */
+.tbl-scroll{overflow:auto;max-height:520px;border:1px solid var(--line);border-radius:9px}
+table{border-collapse:separate;border-spacing:0;width:100%;font-size:12px}
+th,td{padding:6px 9px;text-align:left;border-bottom:1px solid var(--line-2);white-space:nowrap}
+thead th{position:sticky;top:0;z-index:5;background:var(--card);font-size:10.5px;text-transform:uppercase;
+  letter-spacing:.4px;color:var(--muted);font-weight:600;border-bottom:1px solid var(--line);cursor:pointer;user-select:none}
+thead th.nosort{cursor:default}
+tbody tr:hover{background:var(--line-2)}
+td.num,th.num{text-align:right;font-variant-numeric:tabular-nums}
+.pill{display:inline-block;padding:1px 7px;border-radius:999px;font-size:10.5px;font-weight:600;border:1px solid transparent}
+.pill.Hit{background:rgba(33,163,102,.13);color:var(--st-hit)}
+.pill.Late{background:rgba(245,124,0,.14);color:var(--st-late)}
+.pill.Overdue{background:rgba(198,40,40,.13);color:var(--st-overdue)}
+.pill.Pending{background:rgba(107,114,128,.14);color:var(--st-pending)}
+.pill.Skipped{background:transparent;color:var(--st-skip);border-color:var(--line);border-style:dashed}
+.pill.risk{background:rgba(198,40,40,.13);color:var(--st-overdue)}
+.tagdot{display:inline-block;width:8px;height:8px;border-radius:2px;margin-right:5px;vertical-align:-1px;border:1px solid rgba(0,0,0,.18)}
+.drill{cursor:pointer;user-select:none}
+.drill:before{content:"▸";display:inline-block;width:12px;color:var(--muted);transition:transform .15s}
+.drill.open:before{transform:rotate(90deg)}
+tr.lvl2 td:first-child{padding-left:26px}tr.lvl3 td:first-child{padding-left:46px;color:var(--muted)}
+
+/* Charts */
+.chart-box{position:relative;height:330px}
+.chart-box.sm{height:250px}
+.legend{display:flex;gap:12px;flex-wrap:wrap;font-size:11px;color:var(--muted);margin-top:8px}
+.legend i{display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:5px}
+.sc-legend{display:flex;gap:14px;flex-wrap:wrap;font-size:11px;color:var(--muted);margin-top:8px}
+.sc-legend span{display:inline-flex;align-items:center;gap:5px}
+.sc-legend .ln{display:inline-block;width:20px;height:0;border-top-width:2.5px;border-top-style:solid;border-top-color:var(--muted)}
+.sc-legend .dashed{border-top-style:dashed}
+.sc-legend .dotted{border-top-style:dotted}
+
+/* Misc */
+.tabs{display:flex;gap:4px;margin-bottom:10px;border-bottom:1px solid var(--line)}
+.tabs button{border:none;background:none;border-bottom:2px solid transparent;border-radius:0;padding:6px 10px;color:var(--muted)}
+.tabs button.on{color:var(--accent);border-bottom-color:var(--accent);font-weight:600}
+.drop{border:1.5px dashed var(--line);border-radius:var(--radius);padding:10px 14px;text-align:center;color:var(--muted);
+  font-size:12px;transition:all .2s;cursor:pointer;background:var(--card)}
+.drop.hot{border-color:var(--accent);color:var(--accent);background:rgba(45,127,249,.05)}
+.empty{padding:44px;text-align:center;color:var(--muted)}
+.ageing-drill{margin-top:10px}
+.ageing-drill .drill-head{display:flex;justify-content:space-between;align-items:center;gap:8px;margin:0 0 7px}
+.ageing-drill .drill-title{font-size:11.5px;font-weight:600;color:var(--ink)}
+.ageing-drill .drill-meta{font-size:10.5px;color:var(--muted)}
+.ageing-drill .drill-clear{font-size:10.5px;padding:3px 7px}
+.ageing-drill .drill-table{max-height:240px}
+.ageing-drill .drill-table td,.ageing-drill .drill-table th{font-size:10.5px;padding:5px 7px}
+
+.skeleton{height:14px;border-radius:5px;background:linear-gradient(90deg,var(--line-2),var(--line),var(--line-2));
+  background-size:200% 100%;animation:sk 1.2s infinite}
+@keyframes sk{0%{background-position:200% 0}100%{background-position:-200% 0}}
+details.dq{margin-top:10px}
+details.dq summary{cursor:pointer;color:var(--muted);font-size:11.5px}
+.sect-title{font-size:12px;font-weight:650;letter-spacing:.3px;text-transform:uppercase;color:var(--muted);margin:22px 0 10px}
+.toolbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.hide{display:none !important}
+
+/* Print */
+@media print{
+  .filterbar,.hdr-tools,.drop,.ms,button{display:none !important}
+  .card{break-inside:avoid;page-break-inside:avoid;box-shadow:none;border-color:#ccc}
+  .grid{gap:10px}
+  .c4,.c6,.c8{grid-column:span 12}
+  .sect-title{page-break-before:always}
+  .tbl-scroll{max-height:none;overflow:visible}
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <!-- 1 · HEADER -->
+  <header class="app">
+    <h1 class="title">Commissioning Progress Dashboard
+      <small id="hdrSub">Loading sample register…</small>
+    </h1>
+    <div class="hdr-tools">
+      <label class="fld">Data as of<input type="date" id="asOf"></label>
+      <div class="drop" id="drop">Hosted data auto-loads · <u>manual override</u>
+        <input type="file" id="file" accept=".xlsx,.xls,.csv" class="hide">
+      </div>
+      <button id="themeBtn" title="Toggle dark mode">◐ Theme</button>
+      <button id="cbBtn" title="Colour-blind-safe palette">◑ CB palette</button>
+      <button id="printBtn">Print / PDF</button>
+      <button class="primary" id="exportBtn">Export CSV</button>
+    </div>
+  </header>
+
+  
+    <nav class="page-nav" aria-label="Dashboard pages">
+    <button type="button" class="on" data-page="overview">1. Overview &amp; Progress</button>
+    <button type="button" data-page="charts">2. S-Curve &amp; Velocity</button>
+    <button type="button" data-page="tagging">3. Tagging Summary</button>
+    <button type="button" data-page="supplier">4. Equipment Supplier</button>
+    <button type="button" data-page="registers">5. Look-ahead &amp; Overdue</button>
+    <button type="button" data-page="equipment">6. Equipment Register</button>
+    <button type="button" data-page="checklists">7. Checklist Completion</button>
+  </nav>
+
+  <!-- PAGE 1 · OVERVIEW & PROGRESS -->
+  <section class="page on" id="page-overview">
+<!-- 2 · FILTER BAR -->
+  <div class="filterbar" id="filterbar">
+    <div class="filter-row" id="filterRow">
+      <label class="fld">ELI search<input type="text" id="q" placeholder="EDCKUL21…" style="width:150px"></label>
+      <label class="fld">Date from<input type="date" id="dFrom"></label>
+      <label class="fld">Date to<input type="date" id="dTo"></label>
+      <button id="resetBtn">Reset all</button>
+    </div>
+    <div class="chips" id="chips"></div>
+  </div>
+
+  <!-- 3 · KPI STRIP -->
+  <div class="kpis" id="kpis"></div>
+
+  <!-- 4 · INSIGHTS -->
+  <div class="card c12" style="margin-bottom:16px">
+    <div class="card-head"><div><h3>Insight panel</h3><div class="sub">Auto-generated from the current filter scope</div></div></div>
+    <div class="ins" id="insights"></div>
+    <details class="dq"><summary>Column mapping &amp; parser diagnostics</summary><div id="dqBody"></div></details>
+  </div>
+  </section>
+
+  <!-- PAGE 2 · S-CURVE & VELOCITY -->
+  <section class="page" id="page-charts">
+<!-- S-CURVE + TRANCHE FUNNEL -->
+  <div class="grid">
+    <div class="card c8">
+      <div class="card-head">
+        <div><h3>S-curve — planned vs actual vs forecast</h3><div class="sub" id="spiNote"></div></div>
+        <div class="toolbar">
+          <select id="scTranche"></select>
+          <div class="ms" id="scLevelPicker">
+            <button type="button">Levels ▾<span class="n hide">0</span></button>
+            <div class="ms-panel">
+              <div class="ms-actions"><button class="sm" id="scLevelAll">All</button><button class="sm" id="scLevelNone">None</button></div>
+              <div class="list" id="scLevelList"></div>
+            </div>
+          </div>
+          <select id="scMode"><option value="count">Cumulative count</option><option value="pct">Cumulative %</option></select>
+        </div>
+      </div>
+      <div class="chart-box"><canvas id="sCurve"></canvas></div>
+      <div class="sc-legend" id="scLegend"></div>
+    </div>
+    <div class="card c4">
+      <div class="card-head"><div><h3>Tranche funnel</h3><div class="sub">Equipment by highest consecutive level achieved</div></div></div>
+      <div class="chart-box sm"><canvas id="funnel"></canvas></div>
+      <div class="tbl-scroll" style="margin-top:12px;max-height:230px"><table id="trancheTbl"></table></div>
+    </div>
+  </div>
+
+  <!-- VELOCITY & AGEING -->
+  <div class="sect-title">Velocity &amp; ageing</div>
+  <div class="grid">
+    <div class="card c6">
+      <div class="card-head"><div><h3>Weekly achievement — last 8 weeks</h3><div class="sub">Tags achieved by level, with 4-week rolling average</div></div></div>
+      <div class="chart-box sm"><canvas id="velocity"></canvas></div>
+    </div>
+    <div class="card c6">
+      <div class="card-head"><div><h3>Overdue ageing profile</h3><div class="sub">Open tags past their projected date, by age bucket · click a segment to drill down</div></div></div>
+      <div class="chart-box sm"><canvas id="ageing"></canvas></div>
+      <div id="ageingDrill" class="ageing-drill"></div>
+    </div>
+  </div>
+
+  </section>
+
+  <!-- PAGE 2 · TAGGING SUMMARY -->
+  </section>
+
+  <!-- PAGE 3 · TAGGING SUMMARY -->
+  <section class="page" id="page-tagging">
+
+  <!-- TAGGING SUMMARY -->
+  <div class="sect-title">Tagging summary</div>
+  <div class="card c12">
+    <div class="card-head">
+      <div><h3>Tagging matrix</h3><div class="sub">Achieved / total per level — click a row to drill down</div></div>
+      <div class="toolbar">
+        <span style="font-size:11px;color:var(--muted)">Row dimension</span>
+        <select id="matrixDim">
+          <option value="subType">Sub-Type</option><option value="system">System</option>
+          <option value="discipline">Discipline</option><option value="vendor">Equipment Supplier</option>
+          <option value="floor">Floor</option><option value="area">Area</option>
+        </select>
+      </div>
+    </div>
+    <div class="tbl-scroll"><table id="matrixTbl"></table></div>
+  </div>
+
+  </section>
+
+  <!-- PAGE 3 · EQUIPMENT SUPPLIER PERFORMANCE -->
+  
+  </section>
+
+  <!-- PAGE 4 · EQUIPMENT SUPPLIER -->
+  <section class="page" id="page-supplier">
+
+  <!-- EQUIPMENT SUPPLIER -->
+  <div class="sect-title">Equipment supplier performance</div>
+  <div class="grid">
+    <div class="card c12">
+      <div class="card-head"><div><h3>Equipment supplier performance</h3><div class="sub">Ranked by on-time hit rate</div></div></div>
+      <div class="chart-box sm"><canvas id="vendorChart"></canvas></div>
+      <div class="tbl-scroll" style="margin-top:12px;max-height:260px"><table id="vendorTbl"></table></div>
+    </div>
+  </div>
+
+  </section>
+
+  <!-- PAGE 4 · LOOK-AHEAD / OVERDUE / SEQUENCE BREACHES -->
+  
+  </section>
+
+  <!-- PAGE 5 · LOOK-AHEAD & OVERDUE -->
+  <section class="page" id="page-registers">
+
+  <!-- LOOK-AHEAD & OVERDUE -->
+  <div class="sect-title">Look-ahead &amp; overdue register</div>
+  <div class="card c12">
+    <div class="tabs">
+      <button class="on" data-tab="ahead">14-day look-ahead</button>
+      <button data-tab="over">Overdue register</button>
+      <button data-tab="breach">Sequence breaches</button>
+    </div>
+    <div class="tbl-scroll"><table id="aheadTbl"></table></div>
+  </div>
+
+  </section>
+
+  <!-- PAGE 5 · FULL EQUIPMENT REGISTER -->
+  
+  </section>
+
+  <!-- PAGE 6 · FULL EQUIPMENT REGISTER -->
+  <section class="page" id="page-equipment">
+
+  <!-- FULL EQUIPMENT REGISTER -->
+  <div class="sect-title">Equipment register</div>
+  <details class="card c12" id="detailCard">
+    <summary style="cursor:pointer;font-weight:600;font-size:13.5px;margin-bottom:10px">Full filtered register</summary>
+    <div class="card-head">
+      <div class="sub" id="detailCount"></div>
+      <div class="toolbar">
+        <div class="ms" id="colPicker">
+          <button type="button">Columns ▾</button>
+          <div class="ms-panel" id="colPanel"></div>
+        </div>
+        <button class="sm" id="prevPage">‹ Prev</button>
+        <span id="pageInfo" style="font-size:11.5px;color:var(--muted)"></span>
+        <button class="sm" id="nextPage">Next ›</button>
+      </div>
+    </div>
+    <div class="tbl-scroll" style="max-height:640px"><table id="detailTbl"></table></div>
+  </details>
+  </section>
+</div>
+
+  </section>
+
+
+
+  <!-- PAGE 7 · CHECKLIST COMPLETION -->
+  <section class="page" id="page-checklists">
+    <div class="sect-title">Checklist completion</div>
+
+    <div class="filterbar" style="position:static;top:auto">
+      <div class="filter-row">
+        <label class="fld">ELI search<input type="text" id="clQ" placeholder="EDCKUL21…" style="width:160px"></label>
+        <label class="fld">Tranche<select id="clTranche"><option value="ALL">All</option></select></label>
+        <label class="fld">Discipline<select id="clDiscipline"><option value="ALL">All</option></select></label>
+        <label class="fld">System<select id="clSystem"><option value="ALL">All</option></select></label>
+        <label class="fld">Equipment Supplier<select id="clSupplier"><option value="ALL">All</option></select></label>
+        <button type="button" id="clReset">Reset</button>
+      </div>
+    </div>
+
+    <div class="kpis" id="clKpis"></div>
+
+    <div class="grid">
+      <div class="card c12">
+        <div class="card-head">
+          <div><h3>Checklist completion trend</h3><div class="sub">Weighted completion of applicable checklist lines · daily snapshots retained by GitHub</div></div>
+          <div class="toolbar">
+            <select id="clTrendMode"><option value="daily">Daily</option><option value="weekly">Weekly</option></select>
+            <select id="clTrendLevel"><option value="Overall">Overall</option><option value="L1">L1</option><option value="L2">L2</option><option value="L3">L3</option><option value="L4">L4</option><option value="L5">L5</option></select>
+          </div>
+        </div>
+        <div class="chart-box sm"><canvas id="checklistTrend"></canvas></div>
+      </div>
+
+      <div class="card c12">
+        <div class="card-head">
+          <div><h3>Completion by equipment</h3><div class="sub" id="clTableMeta">Current snapshot</div></div>
+          <div class="toolbar">
+            <button class="sm" type="button" id="clPrev">‹ Prev</button>
+            <span id="clPageInfo" style="font-size:11.5px;color:var(--muted)"></span>
+            <button class="sm" type="button" id="clNext">Next ›</button>
+          </div>
+        </div>
+        <div class="tbl-scroll" style="max-height:640px"><table id="clTable"></table></div>
+      </div>
+    </div>
+  </section>
+
+</div>
+<script>
+"use strict";
+/* ============================================================================
+   COMMISSIONING PROGRESS DASHBOARD
+   Modules: util · parse · transform · aggregate · filters · render · insights
+   ========================================================================== */
+
+/* ---------------------------------------------------------------- CONSTANTS */
+const LEVELS = [
+  {k:'L1', tag:'RED',    label:'L1 · Red',    desc:'Delivery / installation', varc:'--tag-red'},
+  {k:'L2', tag:'YELLOW', label:'L2 · Yellow', desc:'Static / pre-functional', varc:'--tag-yellow'},
+  {k:'L3', tag:'GREEN',  label:'L3 · Green',  desc:'Energisation & functional', varc:'--tag-green'},
+  {k:'L4', tag:'BLUE',   label:'L4 · Blue',   desc:'Integrated systems test', varc:'--tag-blue'},
+  {k:'L5', tag:'WHITE',  label:'L5 · White',  desc:'IST / handover', varc:'--tag-white'}
+];
+const LK = LEVELS.map(l=>l.k);
+const DIMS = [
+  {k:'tranche',   t:'Tranche'},
+  {k:'discipline',t:'Discipline'},
+  {k:'system',    t:'System'},
+  {k:'subType',   t:'Sub-Type'},
+  {k:'building',  t:'Building'},
+  {k:'floor',     t:'Floor'},
+  {k:'area',      t:'Area'},
+  {k:'vendor',    t:'Equipment Supplier'}
+];
+const STATUSES = ['Hit','Late','Overdue','Pending','Skipped'];
+const BLANK = '(blank)';
+
+/* -------------------------------------------------------------------- STATE */
+const state = {
+  rows: [], filtered: [], columnMap:{}, dq:[], unparsed:0,
+  filters: Object.fromEntries([...DIMS.map(d=>d.k),'level','status'].map(k=>[k,new Set()])),
+  search:'', dFrom:null, dTo:null, asOf:startOfDay(new Date()), energizedOnly:false,
+  page:0, pageSize:100, detailSort:{k:'eli',dir:1}, colFilters:{}, hiddenCols:new Set(),
+  matrixDim:'subType', matrixOpen:new Set(),
+  scTranche:'ALL', scLevel: new Set(LK), scMode:'count', tab:'ahead',
+  vendorSort:{k:'hitRate',dir:-1}, matrixSort:{k:'name',dir:1}
+};
+const charts = {};
+/* ========================================================== HOSTED DATA CONFIG */
+/*
+ * Keep these files in the same GitHub Pages site/repository as index.html.
+ * Repository layout used for this deployment:
+ *   index.html
+ *   equipment_status.csv
+ *   projected_dates.xlsx
+ */
+const HOSTED_DATA = {
+  equipmentUrl: './data/equipment_status.csv',
+  projectedUrl: 'https://raw.githubusercontent.com/sapoetra/cxalloy-kul21-dashboard/main/projected_dates.xlsx'
+};
+
+
+/* ================================================================== 1. UTIL */
+function startOfDay(d){const x=new Date(d);x.setHours(0,0,0,0);return x;}
+function weekStart(d){const x=startOfDay(d);const wd=(x.getDay()+6)%7;x.setDate(x.getDate()-wd);return x;}
+function addDays(d,n){const x=new Date(d);x.setDate(x.getDate()+n);return x;}
+function addWeeks(d,n){return addDays(d,n*7);}
+function dayDiff(a,b){return Math.round((startOfDay(a)-startOfDay(b))/864e5);}
+const MONTHS=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+const MONIDX={JAN:0,FEB:1,MAR:2,APR:3,MAY:4,JUN:5,JUL:6,AUG:7,SEP:8,SEPT:8,OCT:9,NOV:10,DEC:11};
+function fmtDate(d){ return d ? String(d.getDate()).padStart(2,'0')+'-'+MONTHS[d.getMonth()]+'-'+String(d.getFullYear()).slice(2) : '—'; }
+function pct(n,d){ return d>0 ? (n/d*100) : 0; }
+function fpct(n,d,dp){ return d>0 ? (n/d*100).toFixed(dp===undefined?1:dp)+'%' : '—'; }
+function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+function cssVar(n){ return getComputedStyle(document.documentElement).getPropertyValue(n).trim(); }
+function debounce(fn,ms){let t;return function(){clearTimeout(t);t=setTimeout(()=>fn.apply(this,arguments),ms);};}
+function mulberry32(a){return function(){a|=0;a=a+0x6D2B79F5|0;let t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296;};}
+function uniqSorted(arr){ return [...new Set(arr)].sort((a,b)=>String(a).localeCompare(String(b),undefined,{numeric:true})); }
+
+/**
+ * Robust date parser: Excel serial numbers, Date objects, dd-MMM-yy,
+ * dd/mm/yyyy, yyyy-mm-dd. Returns null for blank; returns undefined-marker
+ * via the caller's unparsed counter for genuinely bad values.
+ */
+function parseDate(v, badRef){
+  if(v===null||v===undefined||v==='') return null;
+  if(v instanceof Date) return isNaN(v.getTime())?null:startOfDay(v);
+  if(typeof v==='number' && isFinite(v)){
+    if(v<20||v>80000){ if(badRef) badRef.n++; return null; }          // implausible serial
+    const ms = Math.round((v-25569)*864e5);                            // 1899-12-30 epoch
+    const d  = new Date(ms);
+    return new Date(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
+  }
+  const s = String(v).trim();
+  if(!s || /^(n\/?a|tbc|tbd|-|na)$/i.test(s)) return null;
+  if(/^\d+(\.\d+)?$/.test(s)) return parseDate(Number(s), badRef);
+  let m = s.match(/^(\d{1,2})[-\/ .]([A-Za-z]{3,9})[-\/ .](\d{2,4})$/);  // 13-Jan-26
+  if(m){
+    const mo = MONIDX[m[2].toUpperCase().slice(0,4)] ?? MONIDX[m[2].toUpperCase().slice(0,3)];
+    if(mo!==undefined){ let y=+m[3]; if(y<100) y+= (y<70?2000:1900); return new Date(y,mo,+m[1]); }
+  }
+  m = s.match(/^([A-Za-z]{3,9})[-\/ .](\d{1,2})[-\/ .,]+(\d{2,4})$/);    // Jan 13, 2026
+  if(m){
+    const mo = MONIDX[m[1].toUpperCase().slice(0,3)];
+    if(mo!==undefined){ let y=+m[3]; if(y<100) y+=2000; return new Date(y,mo,+m[2]); }
+  }
+  m = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);                          // ISO
+  if(m) return new Date(+m[1], +m[2]-1, +m[3]);
+  m = s.match(/^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{2,4})$/);           // dd/mm/yyyy (AU/MY order)
+  if(m){ let y=+m[3]; if(y<100) y+=2000; return new Date(y,+m[2]-1,+m[1]); }
+  const t = Date.parse(s);
+  if(!isNaN(t)) return startOfDay(new Date(t));
+  if(badRef) badRef.n++;                                                // surfaced in data-quality
+  return null;
+}
+
+/* ================================================================= 2. PARSE */
+/** Normalise a header cell: uppercase, punctuation → space, collapse whitespace. */
+function normHdr(v){ return String(v==null?'':v).replace(/[\r\n]+/g,' ').replace(/[^A-Za-z0-9%]+/g,' ').trim().toUpperCase(); }
+
+const HDR_TOKENS = ['ELI','TRANCHE','SUB','SYSTEM','DISCIPLINE','BUILDING','FLOOR','AREA','VENDOR',
+  'CONTRACTOR','CATEGORY','RED','YELLOW','GREEN','BLUE','WHITE','STATUS','TAG','DATE'];
+
+function scoreHeaderRow(row){
+  let s=0;
+  (row||[]).forEach(c=>{ const n=normHdr(c); if(!n) return;
+    HDR_TOKENS.forEach(t=>{ if(n.includes(t)) s++; }); });
+  return s;
+}
+
+/** Detect the real header row in a two-tiered / merged sheet and build labels. */
+function buildHeaders(aoa){
+  let best=-1, bestIdx=0;
+  for(let i=0;i<Math.min(15,aoa.length);i++){ const s=scoreHeaderRow(aoa[i]); if(s>best){best=s;bestIdx=i;} }
+  const h = bestIdx, row = aoa[h]||[], above = h>0 ? (aoa[h-1]||[]) : [];
+  const width = Math.max(row.length, above.length);
+  const labels = [];
+  for(let c=0;c<width;c++){
+    const b = normHdr(row[c]);
+    // Vertical-merge case: value only present on the tier above.
+    labels[c] = b || normHdr(above[c]) || '';
+  }
+  return {headerIndex:h, labels};
+}
+
+/**
+ * Bind columns to fields. Repeated bare "Status" columns are attached to the
+ * tag block immediately to their left by walking the header left → right.
+ */
+function mapColumns(labels){
+  const map = {tags:{}};
+  LEVELS.forEach(l=>{ map.tags[l.k] = {proj:-1, act:-1, status:-1}; });
+  const simple = [
+    ['eli',        n=>/\bELI\b/.test(n) || /NAME ELI/.test(n)],
+    ['tranche',    n=>/TRANCHE/.test(n)],
+    ['subCode',    n=>/SUB\s*CODE/.test(n)],
+    ['subType',    n=>/SUB\s*TYPE/.test(n)],
+    ['system',     n=>/\bSYSTEM\b/.test(n) && !/SUB/.test(n)],
+    ['discipline', n=>/DISCIPLIN/.test(n)],
+    ['building',   n=>/BUILDING/.test(n)],
+    ['floor',      n=>/\bFLOOR\b/.test(n)],
+    ['area',       n=>/\bAREA\b/.test(n) || /\bROOM\b/.test(n)],
+    ['vendor',     n=>/VENDOR|CONTRACTOR/.test(n)],
+    ['category',   n=>/CATEGORY/.test(n)],
+    ['eqStatus',   n=>/EQUIPMENT STATUS/.test(n)]
+  ];
+  const TAGWORD = {RED:'L1', YELLOW:'L2', GREEN:'L3', BLUE:'L4', WHITE:'L5'};
+  let cur = null;
+
+  labels.forEach((n,c)=>{
+    if(!n) return;
+    // Energisation is a standalone milestone; it must not capture a tag slot.
+    if(/ENERGI/.test(n)){ if(map.energization===undefined) map.energization = c; cur = null; return; }
+    for(const [f,test] of simple){ if(map[f]===undefined && test(n)){ map[f]=c; return; } }
+    // Tag blocks
+    for(const w in TAGWORD){ if(n.includes(w)){ cur = TAGWORD[w]; break; } }
+    if(!cur) return;
+    const slot = map.tags[cur];
+    if(/ACTUAL/.test(n))          { if(slot.act<0)    slot.act    = c; }
+    else if(/PROJECT|PLAN|FORECAST|DUE/.test(n)) { if(slot.proj<0) slot.proj = c; }
+    else if(/STATUS/.test(n))     { if(slot.status<0) slot.status = c; }
+  });
+  return map;
+}
+
+/** Ingest an array-of-arrays sheet into normalised row records. */
+function ingestAOA(aoa, sourceName){
+  aoa = (aoa||[]).filter(r=>Array.isArray(r));
+  const {headerIndex, labels} = buildHeaders(aoa);
+  const map = mapColumns(labels);
+  const bad = {n:0};
+  const get = (r,i)=> (i>=0 && i<r.length) ? r[i] : '';
+  const txt = v => String(v==null?'':v).replace(/\s+/g,' ').trim();
+
+  const rows = [];
+  for(let i=headerIndex+1;i<aoa.length;i++){
+    const r = aoa[i];
+    if(!r || r.every(c=>String(c==null?'':c).trim()==='')) continue;
+    const eli = txt(get(r,map.eli));
+    if(!eli) continue;                                     // skip totals / spacer rows
+    const rec = {
+      eli,
+      tranche:    txt(get(r,map.tranche))    || BLANK,
+      subCode:    txt(get(r,map.subCode))    || BLANK,
+      subType:    txt(get(r,map.subType))    || BLANK,
+      system:     txt(get(r,map.system))     || BLANK,
+      discipline: txt(get(r,map.discipline)) || BLANK,
+      building:   txt(get(r,map.building))   || BLANK,
+      floor:      txt(get(r,map.floor))      || BLANK,
+      area:       txt(get(r,map.area))       || BLANK,
+      vendor:     normalizeVendor(txt(get(r,map.vendor))) || BLANK,
+      category:   txt(get(r,map.category))   || BLANK,
+      eqStatus:   txt(get(r,map.eqStatus))   || 'NO TAG',
+      energization: map.energization!==undefined ? parseDate(get(r,map.energization),bad) : null,
+      tags:{}
+    };
+    LEVELS.forEach(l=>{
+      const s = map.tags[l.k];
+      const statusTxt = txt(get(r,s.status));
+      rec.tags[l.k] = {
+        proj: parseDate(get(r,s.proj), bad),
+        act:  parseDate(get(r,s.act),  bad),
+        src:  statusTxt,
+        skipped: /SKIP/i.test(statusTxt),
+        present: s.proj>=0 || s.act>=0 || s.status>=0
+      };
+    });
+    rows.push(rec);
+  }
+  state.columnMap = {labels, map, headerIndex, sourceName};
+  state.unparsed = bad.n;
+  transform(rows);
+}
+
+function normalizeVendor(v){
+  if(!v) return v;
+  return v.replace(/\s+/g,' ').trim().toUpperCase();
+}
+
+/* ============================================================= 3. TRANSFORM */
+/** Compute achievement, current level, variance and per-level classification. */
+function transform(rows){
+  rows.forEach(r=>{
+    LK.forEach(k=>{
+      const t = r.tags[k];
+      t.achieved = !!t.act && !t.skipped;                 // skipped never counts as achieved
+      t.variance = (t.act && t.proj) ? dayDiff(t.act, t.proj) : null;
+    });
+    // Highest CONSECUTIVE level achieved (skipped levels are transparent).
+    let lvl = 0;
+    for(let i=0;i<LK.length;i++){
+      const t = r.tags[LK[i]];
+      if(t.achieved){ lvl = i+1; }
+      else if(t.skipped){ continue; }
+      else break;
+    }
+    r.currentLevel = lvl;
+    r.currentLevelLabel = lvl===0 ? 'NO TAG' : LEVELS[lvl-1].label;
+  });
+  state.rows = rows;
+  classify(state.asOf);
+  buildFilterUI();
+  runDataQuality();
+  refresh(true);
+}
+
+/** Classification depends on the "data as of" date, so it is recomputed on change. */
+function classify(asOf){
+  state.rows.forEach(r=>{
+    LK.forEach(k=>{
+      const t = r.tags[k];
+      if(t.skipped)                       t.cls = 'Skipped';
+      else if(t.achieved)                 t.cls = (t.proj && t.act > t.proj) ? 'Late' : 'Hit';
+      else if(t.proj && t.proj < asOf)    t.cls = 'Overdue';
+      else                                t.cls = 'Pending';
+      t.age = (t.cls==='Overdue') ? dayDiff(asOf, t.proj) : 0;
+    });
+  });
+}
+
+/* =============================================================== 4. FILTERS */
+function applyFilters(){
+  const f = state.filters, q = state.search.trim().toUpperCase();
+  const lvSel = [...f.level], stSel = [...f.status];
+  state.filtered = state.rows.filter(r=>{
+    for(const d of DIMS){ const s=f[d.k]; if(s.size && !s.has(r[d.k])) return false; }
+    if(q && !r.eli.toUpperCase().includes(q)) return false;
+    if(state.energizedOnly && !r.energization) return false;
+    if(lvSel.length || stSel.length){
+      const levels = lvSel.length ? lvSel : LK;
+      let ok=false;
+      for(const k of levels){
+        const t = r.tags[k]; if(!t) continue;
+        if(stSel.length){ if(stSel.includes(t.cls)){ ok=true; break; } }
+        else if(!t.skipped && (t.act||t.proj)){ ok=true; break; }
+      }
+      if(!ok) return false;
+    }
+    if(state.dFrom || state.dTo){
+      let hit=false;
+      for(const k of LK){
+        const t=r.tags[k];
+        for(const d of [t.proj,t.act]){
+          if(d && (!state.dFrom||d>=state.dFrom) && (!state.dTo||d<=state.dTo)){ hit=true; break; }
+        }
+        if(hit) break;
+      }
+      if(!hit) return false;
+    }
+    return true;
+  });
+  state.page = 0;
+}
+
+/* ============================================================= 5. AGGREGATE */
+/** Level roll-up: achieved / denominator (skipped excluded) with status counts. */
+function levelStats(rows){
+  const out = {};
+  LK.forEach(k=>{
+    const s = {achieved:0, total:0, skipped:0, hit:0, late:0, overdue:0, pending:0, ageSum:0, lateDays:0};
+    rows.forEach(r=>{
+      const t = r.tags[k];
+      if(t.skipped){ s.skipped++; return; }
+      s.total++;
+      if(t.achieved) s.achieved++;
+      if(t.cls==='Hit') s.hit++;
+      if(t.cls==='Late'){ s.late++; s.lateDays += (t.variance||0); }
+      if(t.cls==='Overdue'){ s.overdue++; s.ageSum += t.age; }
+      if(t.cls==='Pending') s.pending++;
+    });
+    out[k]=s;
+  });
+  return out;
+}
+function overall(rows){
+  const ls = levelStats(rows);
+  let a=0,t=0,od=0,late=0,hit=0,pend=0;
+  LK.forEach(k=>{ a+=ls[k].achieved; t+=ls[k].total; od+=ls[k].overdue; late+=ls[k].late; hit+=ls[k].hit; pend+=ls[k].pending; });
+  return {ls, achieved:a, total:t, overdue:od, late, hit, pending:pend,
+          weighted:pct(a,t), hitRate:pct(hit,hit+late), overduePctOpen:pct(od,od+pend)};
+}
+function countInWeek(rows, ws){
+  const we = addWeeks(ws,1); let n=0;
+  rows.forEach(r=>LK.forEach(k=>{ const t=r.tags[k]; if(t.achieved && t.act>=ws && t.act<we) n++; }));
+  return n;
+}
+function lookAheadWeek(rows, ws){
+  const we = addWeeks(ws,1), by={total:0};
+  LK.forEach(k=>by[k]=0);
+  rows.forEach(r=>LK.forEach(k=>{
+    const t=r.tags[k];
+    if(!t.achieved && !t.skipped && t.proj && t.proj>=ws && t.proj<we){ by[k]++; by.total++; }
+  }));
+  return by;
+}
+/** Weekly cumulative planned / actual / forecast series for the S-curve — combined across selected levels, used for headline SPI/slip stats. */
+function sCurveSeries(rows){
+  const lv = [...state.scLevel];
+  if(!lv.length) return null;
+  const src = state.scTranche==='ALL' ? rows : rows.filter(r=>r.tranche===state.scTranche);
+  const plan=[], act=[];
+  src.forEach(r=>lv.forEach(k=>{
+    const t=r.tags[k]; if(t.skipped) return;
+    if(t.proj) plan.push(t.proj);
+    if(t.achieved) act.push(t.act);
+  }));
+  if(!plan.length && !act.length) return null;
+  const all = plan.concat(act);
+  let min = weekStart(new Date(Math.min.apply(null,all)));
+  let max = weekStart(new Date(Math.max.apply(null,all)));
+  const asOfW = weekStart(state.asOf);
+  if(asOfW>max) max = asOfW;
+  if(dayDiff(max,min)/7 > 200) max = addWeeks(min,200);         // guard pathological ranges
+  const weeks=[]; for(let d=new Date(min); d<=max; d=addWeeks(d,1)) weeks.push(new Date(d));
+  const bucket = (arr)=>{ const m=new Map(); arr.forEach(d=>{const w=weekStart(d).getTime(); m.set(w,(m.get(w)||0)+1);}); return m; };
+  const pm = bucket(plan), am = bucket(act);
+  let pc=0, ac=0;
+  const planned=[], actual=[];
+  weeks.forEach(w=>{
+    pc += pm.get(w.getTime())||0;
+    planned.push(pc);
+    if(w<=asOfW){ ac += am.get(w.getTime())||0; actual.push(ac); } else actual.push(null);
+  });
+  // Forecast: trailing 4-week achievement rate extended to the planned total.
+  const idxNow = weeks.findIndex(w=>w.getTime()===asOfW.getTime());
+  const iNow = idxNow<0 ? weeks.length-1 : idxNow;
+  let recent=0; for(let i=Math.max(0,iNow-3); i<=iNow; i++) recent += (am.get(weeks[i].getTime())||0);
+  const rate = recent/4;
+  const totalPlanned = pc;
+  const forecast = weeks.map((w,i)=> i<=iNow ? (i===iNow?actual[i]:null) : null);
+  let fv = actual[iNow]||0, fw = iNow;
+  const fWeeks = weeks.slice();
+  while(fv < totalPlanned && rate>0.01 && fw < 300){
+    fw++; fv = Math.min(totalPlanned, fv+rate);
+    if(fw>=fWeeks.length) fWeeks.push(addWeeks(fWeeks[fWeeks.length-1],1));
+    forecast[fw] = fv;
+  }
+  while(planned.length < fWeeks.length) planned.push(totalPlanned);
+  while(actual.length  < fWeeks.length) actual.push(null);
+  const spi = planned[iNow]>0 ? (actual[iNow]||0)/planned[iNow] : null;
+  // Slip: how many weeks back the plan matched today's actual output.
+  let slipWeeks = 0;
+  if(actual[iNow]!=null){ for(let i=iNow;i>=0;i--){ if(planned[i]<=actual[iNow]){ slipWeeks = iNow-i; break; } } }
+  const forecastEnd = forecast.reduce((acc,v,i)=> v!=null ? i : acc, iNow);
+  return {weeks:fWeeks, planned, actual, forecast, spi, iNow, rate, totalPlanned,
+          slipWeeks, finishWeek:fWeeks[forecastEnd], plannedFinish:fWeeks[planned.findIndex(v=>v>=totalPlanned)] || fWeeks[fWeeks.length-1]};
+}
+/** Per-level cumulative series for the multi-colour S-curve chart, aligned to the shared "weeks" timeline from sCurveSeries(). */
+function levelCumulative(rows, k, weeks, iNow){
+  const plan=[], act=[];
+  rows.forEach(r=>{
+    const t = r.tags[k]; if(!t || t.skipped) return;
+    if(t.proj) plan.push(t.proj);
+    if(t.achieved) act.push(t.act);
+  });
+  const bucket = (arr)=>{ const m=new Map(); arr.forEach(d=>{const w=weekStart(d).getTime(); m.set(w,(m.get(w)||0)+1);}); return m; };
+  const pm = bucket(plan), am = bucket(act);
+  let pc=0, ac=0;
+  const planned=[], actual=[];
+  weeks.forEach((w,i)=>{
+    pc += pm.get(w.getTime())||0;
+    planned.push(pc);
+    if(i<=iNow){ ac += am.get(w.getTime())||0; actual.push(ac); } else actual.push(null);
+  });
+  const totalPlanned = pc;
+  let recent=0; for(let i=Math.max(0,iNow-3); i<=iNow; i++) recent += (am.get(weeks[i].getTime())||0);
+  const rate = recent/4;
+  const forecast = weeks.map((w,i)=>{
+    if(i<=iNow) return actual[i];
+    return Math.min(totalPlanned, (actual[iNow]||0) + rate*(i-iNow));
+  });
+  return {planned, actual, forecast, totalPlanned};
+}
+function groupBy(rows, key){
+  const m = new Map();
+  rows.forEach(r=>{ const v=r[key]||BLANK; if(!m.has(v)) m.set(v,[]); m.get(v).push(r); });
+  return m;
+}
+function lookAheadItems(rows, days){
+  const end = addDays(state.asOf, days), out=[];
+  rows.forEach(r=>LK.forEach((k,i)=>{
+    const t=r.tags[k];
+    if(t.achieved||t.skipped||!t.proj) return;
+    if(t.proj>=state.asOf && t.proj<=end){
+      let risk=false;
+      for(let j=i-1;j>=0;j--){ const p=r.tags[LK[j]]; if(p.skipped) continue; if(!p.achieved) risk=true; break; }
+      out.push({r, k, proj:t.proj, days:dayDiff(t.proj,state.asOf), risk});
+    }
+  }));
+  return out.sort((a,b)=>a.proj-b.proj);
+}
+function overdueItems(rows){
+  const out=[];
+  rows.forEach(r=>LK.forEach(k=>{ const t=r.tags[k]; if(t.cls==='Overdue') out.push({r,k,proj:t.proj,age:t.age}); }));
+  return out.sort((a,b)=>b.age-a.age);
+}
+function sequenceBreaches(rows){
+  const out=[];
+  rows.forEach(r=>{
+    for(let i=1;i<LK.length;i++){
+      const hi=r.tags[LK[i]]; if(!hi.achieved) continue;
+      for(let j=i-1;j>=0;j--){
+        const lo=r.tags[LK[j]];
+        if(!lo.skipped && !lo.achieved){ out.push({r, hi:LK[i], lo:LK[j]}); i=LK.length; break; }
+      }
+    }
+  });
+  return out;
+}
+function vendorStats(rows){
+  const m = groupBy(rows,'vendor'), out=[];
+  m.forEach((rs,name)=>{
+    const o = overall(rs);
+    let lateDays=0, lateN=0;
+    LK.forEach(k=>{ lateDays += o.ls[k].lateDays; lateN += o.ls[k].late; });
+    out.push({name, scope:rs.length, achieved:o.achieved, total:o.total,
+      hitRate:o.hitRate, avgLate: lateN? lateDays/lateN : 0, overdue:o.overdue, pctComplete:o.weighted});
+  });
+  return out;
+}
+
+/* ================================================================ 6. RENDER */
+const fmtInt = n => (n||0).toLocaleString();
+
+function refresh(full){
+  const hdr = document.getElementById('hdrSub');
+  hdr.textContent = 'Recalculating…';
+  applyFilters();
+  renderChips();
+  renderKPIs();
+  renderInsights();
+  renderSCurve();
+  renderFunnel();
+  renderTrancheTable();
+  renderVelocity();
+  renderAgeing();
+  renderMatrix();
+  renderVendor();
+  renderTabTable();
+  renderDetail(full);
+  document.getElementById('hdrSub').textContent =
+    fmtInt(state.filtered.length)+' of '+fmtInt(state.rows.length)+' items in scope · source: '+
+    (state.columnMap.sourceName||'sample') + ' · as of '+fmtDate(state.asOf);
+}
+const refreshDebounced = debounce(()=>refresh(false), 350);
+
+/* --- 6a. KPI strip -------------------------------------------------------- */
+function renderKPIs(){
+  const rows = state.filtered, o = overall(rows);
+  const tranches = uniqSorted(state.rows.map(r=>r.tranche));
+  const byTranche = tranches.map(t=>({t, rows: rows.filter(r=>r.tranche===t)}));
+  const thisW = weekStart(state.asOf), lastW = addWeeks(thisW,-1), prevW = addWeeks(thisW,-2);
+  const aLast = countInWeek(rows,lastW), aThis = countInWeek(rows,thisW), aPrev = countInWeek(rows,prevW);
+  const w1 = lookAheadWeek(rows, addWeeks(thisW,1)), w2 = lookAheadWeek(rows, addWeeks(thisW,2));
+  const energised = rows.filter(r=>r.energization).length;
+  const cards = [];
+
+  cards.push(kpiCard({
+    id:'total', label:'Total equipment', val:fmtInt(rows.length),
+    sub: byTranche.map(b=>b.t+' '+fmtInt(b.rows.length)).join(' · ') || '—', action:()=>resetAll()
+  }));
+
+  LEVELS.forEach(l=>{
+    const s = o.ls[l.k];
+    const per = byTranche.map(b=>{ const x=levelStats(b.rows)[l.k]; return b.t+' '+fpct(x.achieved,x.total,0); }).join(' · ');
+    cards.push(kpiCard({
+      id:'lvl-'+l.k, label:l.label+' · '+l.desc,
+      val: fmtInt(s.achieved)+' <small>/ '+fmtInt(s.total)+'</small>',
+      big: fpct(s.achieved,s.total),
+      bar: {p:pct(s.achieved,s.total), color:'var('+l.varc+')', outline:l.k==='L5'},
+      sub: per + (s.skipped? ' · '+s.skipped+' skipped':''),
+      active: state.filters.level.has(l.k),
+      action:()=>{ toggleSet(state.filters.level, l.k); refresh(); }
+    }));
+  });
+
+  cards.push(kpiCard({id:'weighted', label:'Weighted completion', val:o.weighted.toFixed(1)+'<small>%</small>',
+    bar:{p:o.weighted,color:'var(--accent)'},
+    sub: byTranche.map(b=>b.t+' '+overall(b.rows).weighted.toFixed(0)+'%').join(' · ') || '—',
+    action:()=>resetAll()}));
+
+  cards.push(kpiCard({id:'overdue', label:'Overdue tags', val:fmtInt(o.overdue),
+    sub:o.overduePctOpen.toFixed(1)+'% of open tags', active:state.filters.status.has('Overdue'),
+    action:()=>{ toggleSet(state.filters.status,'Overdue'); refresh(); }}));
+
+  cards.push(kpiCard({id:'late', label:'Late completions', val:fmtInt(o.late),
+    sub:'avg '+(o.late? (LK.reduce((a,k)=>a+o.ls[k].lateDays,0)/o.late).toFixed(0):'0')+' days late',
+    active:state.filters.status.has('Late'), action:()=>{ toggleSet(state.filters.status,'Late'); refresh(); }}));
+
+  cards.push(kpiCard({id:'hit', label:'On-time hit rate', val:o.hitRate.toFixed(1)+'<small>%</small>',
+    bar:{p:o.hitRate,color:'var(--st-hit)'}, sub:fmtInt(o.hit)+' hit / '+fmtInt(o.late)+' late',
+    active:state.filters.status.has('Hit'), action:()=>{ toggleSet(state.filters.status,'Hit'); refresh(); }}));
+
+  cards.push(kpiCard({id:'energised', label:'Energised equipment', val:fmtInt(energised),
+    sub:fpct(energised,rows.length)+' of scope', active:state.energizedOnly,
+    action:()=>{ state.energizedOnly=!state.energizedOnly; refresh(); }}));
+
+  const d = aThis - aLast, dPrev = aLast - aPrev;
+  cards.push(kpiCard({id:'wk', label:'Achieved this week (running)', val:fmtInt(aThis),
+    sub:'<span class="delta '+(d>=0?'up':'down')+'">'+(d>=0?'▲':'▼')+' '+Math.abs(d)+'</span> vs last week ('+aLast+')'}));
+  cards.push(kpiCard({id:'wklast', label:'Achieved last week', val:fmtInt(aLast),
+    sub:'<span class="delta '+(dPrev>=0?'up':'down')+'">'+(dPrev>=0?'▲':'▼')+' '+Math.abs(dPrev)+'</span> vs prior week'}));
+
+  cards.push(kpiCard({id:'la', label:'2-week look-ahead', val:fmtInt(w1.total+w2.total),
+    sub:'W+1 '+w1.total+' · W+2 '+w2.total+'<br>'+LK.map(k=>k+' '+(w1[k]+w2[k])).join(' · ')}));
+
+  const el = document.getElementById('kpis');
+  el.innerHTML='';
+  cards.forEach(c=>el.appendChild(c));
+}
+function kpiCard(cfg){
+  const d = document.createElement('div');
+  d.className = 'kpi'+(cfg.active?' active':'');
+  d.innerHTML =
+    '<div class="k-label">'+esc(cfg.label)+'</div>'+
+    '<div class="k-val">'+cfg.val+(cfg.big?' <small>('+cfg.big+')</small>':'')+'</div>'+
+    (cfg.bar?'<div class="bar"><i style="width:'+Math.min(100,cfg.bar.p).toFixed(1)+'%;background:'+cfg.bar.color+
+      (cfg.bar.outline?';border:1px solid var(--line)':'')+'"></i></div>':'')+
+    (cfg.sub?'<div class="k-sub">'+cfg.sub+'</div>':'');
+  if(cfg.action) d.onclick = cfg.action; else d.style.cursor='default';
+  return d;
+}
+function toggleSet(s,v){ s.has(v)?s.delete(v):s.add(v); }
+
+/* --- 6b. Filter UI -------------------------------------------------------- */
+function buildFilterUI(){
+  const row = document.getElementById('filterRow');
+  [...row.querySelectorAll('.ms')].forEach(n=>n.remove());
+  const first = row.firstChild;
+  const defs = DIMS.map(d=>({key:d.k, title:d.t, opts:uniqSorted(state.rows.map(r=>r[d.k]))}));
+  defs.push({key:'level',  title:'Level',  opts:LK});
+  defs.push({key:'status', title:'Status', opts:STATUSES});
+  defs.forEach(def=>{
+    const wrap = document.createElement('div');
+    wrap.className='ms';
+    const counts = new Map();
+    if(DIMS.some(d=>d.k===def.key)) state.rows.forEach(r=>counts.set(r[def.key],(counts.get(r[def.key])||0)+1));
+    wrap.innerHTML = '<button type="button">'+esc(def.title)+' ▾<span class="n hide">0</span></button>'+
+      '<div class="ms-panel"><input class="search" placeholder="Filter…">'+
+      '<div class="ms-actions"><button class="sm all">All</button><button class="sm none">None</button></div>'+
+      '<div class="list"></div></div>';
+    const list = wrap.querySelector('.list'), badge = wrap.querySelector('.n');
+    def.opts.forEach(o=>{
+      const lab = document.createElement('label');
+      lab.className='opt'; lab.dataset.v=String(o).toLowerCase();
+      lab.innerHTML='<input type="checkbox" value="'+esc(o)+'"><span>'+esc(o)+'</span>'+
+        (counts.has(o)?'<span class="cnt">'+counts.get(o)+'</span>':'');
+      list.appendChild(lab);
+    });
+    const sync=()=>{ const n=state.filters[def.key].size; badge.textContent=n; badge.classList.toggle('hide',!n); };
+    list.addEventListener('change',e=>{
+      const cb=e.target; if(cb.type!=='checkbox') return;
+      cb.checked ? state.filters[def.key].add(cb.value) : state.filters[def.key].delete(cb.value);
+      sync(); refreshDebounced();
+    });
+    wrap.querySelector('.search').addEventListener('input',e=>{
+      const v=e.target.value.toLowerCase();
+      [...list.children].forEach(c=>c.classList.toggle('hide', v && !c.dataset.v.includes(v)));
+    });
+    wrap.querySelector('.all').onclick=()=>{ [...list.querySelectorAll('input')].forEach(i=>{ if(!i.closest('.hide')){i.checked=true; state.filters[def.key].add(i.value);} }); sync(); refresh(); };
+    wrap.querySelector('.none').onclick=()=>{ [...list.querySelectorAll('input')].forEach(i=>i.checked=false); state.filters[def.key].clear(); sync(); refresh(); };
+    wrap.querySelector('button').onclick=e=>{ e.stopPropagation();
+      const wasOpen=wrap.classList.contains('open');
+      document.querySelectorAll('.ms.open').forEach(m=>m.classList.remove('open'));
+      if(!wasOpen) wrap.classList.add('open'); };
+    row.insertBefore(wrap, first);
+    def.el = wrap; def.sync = sync;
+  });
+  state._filterDefs = defs;
+  // S-curve tranche selector
+  const tSel = document.getElementById('scTranche');
+  tSel.innerHTML = '<option value="ALL">All tranches</option>' + uniqSorted(state.rows.map(r=>r.tranche)).map(t=>'<option>'+esc(t)+'</option>').join('');
+  tSel.value = state.scTranche;
+  buildScLevelPicker();
+  buildColPicker();
+}
+/** S-curve level multi-select — same checkbox-panel pattern as the other slicers, driving state.scLevel (a Set). */
+function buildScLevelPicker(){
+  const list = document.getElementById('scLevelList');
+  list.innerHTML = LEVELS.map(l=>
+    '<label class="opt"><input type="checkbox" value="'+l.k+'" '+(state.scLevel.has(l.k)?'checked':'')+
+    '><span><span class="tagdot" style="background:var('+l.varc+')"></span>'+esc(l.label)+'</span></label>'
+  ).join('');
+  const wrap = document.getElementById('scLevelPicker'), badge = wrap.querySelector('.n');
+  const sync = ()=>{ badge.textContent = state.scLevel.size; badge.classList.toggle('hide', state.scLevel.size===LK.length); };
+  list.onchange = e=>{
+    const cb = e.target; if(cb.type!=='checkbox') return;
+    cb.checked ? state.scLevel.add(cb.value) : state.scLevel.delete(cb.value);
+    sync(); renderSCurve();
+  };
+  wrap.querySelector('#scLevelAll').onclick = ()=>{ LK.forEach(k=>state.scLevel.add(k)); buildScLevelPicker(); renderSCurve(); };
+  wrap.querySelector('#scLevelNone').onclick = ()=>{ state.scLevel.clear(); buildScLevelPicker(); renderSCurve(); };
+  wrap.querySelector('button').onclick = e=>{
+    e.stopPropagation();
+    const was = wrap.classList.contains('open');
+    document.querySelectorAll('.ms.open').forEach(m=>m.classList.remove('open'));
+    if(!was) wrap.classList.add('open');
+  };
+  sync();
+}
+function renderChips(){
+  const box = document.getElementById('chips'); box.innerHTML='';
+  const add=(label,val,clear)=>{
+    const c=document.createElement('div'); c.className='chip';
+    c.innerHTML='<b>'+esc(label)+':</b> '+esc(val)+' <span>✕</span>';
+    c.querySelector('span').onclick=()=>{ clear(); syncFilterBadges(); refresh(); };
+    box.appendChild(c);
+  };
+  const titles = Object.fromEntries(DIMS.map(d=>[d.k,d.t])); titles.level='Level'; titles.status='Status';
+  Object.keys(state.filters).forEach(k=>{
+    state.filters[k].forEach(v=>add(titles[k], v, ()=>{
+      state.filters[k].delete(v);
+      const def=(state._filterDefs||[]).find(d=>d.key===k);
+      if(def){ const cb=def.el.querySelector('input[value="'+CSS.escape(v)+'"]'); if(cb) cb.checked=false; }
+    }));
+  });
+  if(state.search) add('ELI', state.search, ()=>{ state.search=''; document.getElementById('q').value=''; });
+  if(state.dFrom)  add('From', fmtDate(state.dFrom), ()=>{ state.dFrom=null; document.getElementById('dFrom').value=''; });
+  if(state.dTo)    add('To',   fmtDate(state.dTo),   ()=>{ state.dTo=null;   document.getElementById('dTo').value=''; });
+  if(state.energizedOnly) add('Flag','Energised only', ()=>{ state.energizedOnly=false; });
+}
+function syncFilterBadges(){ (state._filterDefs||[]).forEach(d=>d.sync&&d.sync()); }
+function resetAll(){
+  Object.values(state.filters).forEach(s=>s.clear());
+  state.search=''; state.dFrom=null; state.dTo=null; state.energizedOnly=false; state.colFilters={};
+  document.getElementById('q').value=''; document.getElementById('dFrom').value=''; document.getElementById('dTo').value='';
+  document.querySelectorAll('.ms-panel input[type=checkbox]').forEach(i=>i.checked=false);
+  syncFilterBadges(); refresh(true);
+}
+
+/* --- 6c. Charts ----------------------------------------------------------- */
+Chart.register({
+  id:'todayLine',
+  afterDatasetsDraw(chart, args, opts){
+    if(!opts || opts.index==null || opts.index<0) return;
+    const x = chart.scales.x, a = chart.chartArea;
+    const px = x.getPixelForValue(opts.index);
+    if(px==null||isNaN(px)) return;
+    const c = chart.ctx;
+    c.save(); c.strokeStyle = opts.color||'#888'; c.setLineDash([5,4]); c.lineWidth=1.4;
+    c.beginPath(); c.moveTo(px,a.top); c.lineTo(px,a.bottom); c.stroke();
+    c.setLineDash([]); c.fillStyle=opts.color||'#888'; c.font='600 10px Inter,sans-serif';
+    c.fillText(opts.label||'Today', px+4, a.top+11);
+    c.restore();
+  }
+});
+function chartDefaults(){
+  Chart.defaults.font.family = 'Inter,system-ui,sans-serif';
+  Chart.defaults.font.size = 11;
+  Chart.defaults.color = cssVar('--muted');
+  Chart.defaults.animation.duration = 200;
+  Chart.defaults.plugins.legend.labels.boxWidth = 10;
+  Chart.defaults.plugins.legend.labels.usePointStyle = true;
+}
+function upsert(id, cfg){
+  const el = document.getElementById(id); if(!el) return;
+  if(charts[id]) charts[id].destroy();
+  cfg.options = cfg.options||{};
+  cfg.options.maintainAspectRatio = false;
+  cfg.options.responsive = true;
+  charts[id] = new Chart(el.getContext('2d'), cfg);
+}
+function gridColor(){ return cssVar('--line'); }
+
+/** S-curve: one solid (actual) / dashed (planned) / dotted (forecast) trio per selected level, each in that level's own colour. */
+function renderSCurve(){
+  const s = sCurveSeries(state.filtered);   // combined stats across selected levels, drives the headline note
+  const note = document.getElementById('spiNote');
+  const legendBox = document.getElementById('scLegend');
+  if(!s){
+    if(charts.sCurve) charts.sCurve.destroy();
+    note.textContent = state.scLevel.size===0 ? 'Select at least one commissioning level to plot.' : 'No dated tags in the current scope.';
+    legendBox.innerHTML = '';
+    return;
+  }
+  const asPct = state.scMode==='pct';
+  const rows = state.scTranche==='ALL' ? state.filtered : state.filtered.filter(r=>r.tranche===state.scTranche);
+  const levels = LEVELS.filter(l=>state.scLevel.has(l.k));
+  const labels = s.weeks.map(w=>fmtDate(w));
+  const datasets = [];
+
+  levels.forEach(l=>{
+    const lc = levelCumulative(rows, l.k, s.weeks, s.iNow);
+    const color = cssVar(l.varc);
+    const scale = v => (v==null?null : asPct ? +(pct(v, lc.totalPlanned||1).toFixed(1)) : v);
+    datasets.push({label:l.k+' planned',  data:lc.planned.map(scale),  borderColor:color, borderDash:[6,4],  borderWidth:1.6, pointRadius:0, tension:.25, fill:false});
+    datasets.push({label:l.k+' actual',   data:lc.actual.map(scale),   borderColor:color,                    borderWidth:2.6, pointRadius:0, tension:.25, fill:false});
+    datasets.push({label:l.k+' forecast', data:lc.forecast.map(scale), borderColor:color, borderDash:[1,3],  borderWidth:1.4, pointRadius:0, tension:.2,  fill:false});
+  });
+
+  const spiTxt = s.spi==null?'n/a':s.spi.toFixed(2);
+  const lvLabel = levels.length===LK.length ? 'L1–L5 combined' : levels.map(l=>l.k).join(' + ');
+  note.innerHTML = '<b>'+lvLabel+'</b> · SPI (actual ÷ planned to date) <b>'+spiTxt+'</b> · schedule slip ≈ <b>'+s.slipWeeks+' wk</b> ('+(s.slipWeeks*7)+' d) · '+
+    'run-rate '+s.rate.toFixed(1)+'/wk · forecast finish <b>'+fmtDate(s.finishWeek)+'</b> vs plan '+fmtDate(s.plannedFinish);
+
+  legendBox.innerHTML =
+    '<span><span class="ln solid"></span>Actual</span>'+
+    '<span><span class="ln dashed"></span>Planned</span>'+
+    '<span><span class="ln dotted"></span>Forecast</span>'+
+    levels.map(l=>'<span><span class="tagdot" style="background:var('+l.varc+')"></span>'+l.k+'</span>').join('');
+
+  upsert('sCurve',{
+    type:'line',
+    data:{labels, datasets},
+    options:{
+      interaction:{mode:'index',intersect:false},
+      plugins:{
+        legend:{display:false},
+        todayLine:{index:s.iNow, label:'Data as of', color:cssVar('--ink-2')}
+      },
+      scales:{
+        x:{grid:{display:false}, ticks:{maxTicksLimit:14, autoSkip:true}},
+        y:{beginAtZero:true, grid:{color:gridColor()},
+           title:{display:true, text: asPct?'Cumulative %':'Cumulative tags achieved'},
+           ticks:{callback:v=> asPct? v+'%' : v}}
+      }
+    }
+  });
+}
+function renderFunnel(){
+  const tranches = uniqSorted(state.filtered.map(r=>r.tranche));
+  const buckets = ['NO TAG'].concat(LEVELS.map(l=>l.label));
+  const colors = [cssVar('--st-pending')].concat(LEVELS.map(l=>cssVar(l.varc)));
+  const data = buckets.map((b,i)=> tranches.map(t=>
+    state.filtered.filter(r=>r.tranche===t && r.currentLevel===i).length));
+  upsert('funnel',{
+    type:'bar',
+    data:{labels:tranches, datasets: buckets.map((b,i)=>({
+      label:b, data:data[i], backgroundColor:colors[i],
+      borderColor: i===5?cssVar('--line'):'transparent', borderWidth: i===5?1:0, stack:'s'
+    }))},
+    options:{
+      indexAxis:'y',
+      plugins:{ legend:{position:'bottom'},
+        tooltip:{callbacks:{ label(c){
+          const tot = tranches.map(t=>state.filtered.filter(r=>r.tranche===t).length)[c.dataIndex]||1;
+          return c.dataset.label+': '+c.parsed.x+' ('+pct(c.parsed.x,tot).toFixed(1)+'%)';
+        }}}},
+      scales:{ x:{stacked:true, grid:{color:gridColor()}, beginAtZero:true}, y:{stacked:true, grid:{display:false}} }
+    }
+  });
+}
+function renderTrancheTable(){
+  const tranches = uniqSorted(state.filtered.map(r=>r.tranche));
+  let h = '<thead><tr><th class="nosort">Tranche</th><th class="num nosort">Total</th>'+
+    LEVELS.map(l=>'<th class="num nosort">'+l.k+'</th>').join('')+
+    '<th class="num nosort">% complete</th><th class="num nosort">Overdue</th></tr></thead><tbody>';
+  tranches.forEach(t=>{
+    const rs = state.filtered.filter(r=>r.tranche===t), o = overall(rs);
+    h += '<tr><td><b>'+esc(t)+'</b></td><td class="num">'+fmtInt(rs.length)+'</td>'+
+      LEVELS.map(l=>'<td class="num">'+o.ls[l.k].achieved+'<span style="color:var(--muted)">/'+o.ls[l.k].total+'</span></td>').join('')+
+      '<td class="num"><b>'+o.weighted.toFixed(1)+'%</b></td>'+
+      '<td class="num" style="color:'+(o.overdue?'var(--st-overdue)':'inherit')+'">'+o.overdue+'</td></tr>';
+  });
+  const oa = overall(state.filtered);
+  h += '<tr style="font-weight:600;background:var(--line-2)"><td>Total</td><td class="num">'+fmtInt(state.filtered.length)+'</td>'+
+    LEVELS.map(l=>'<td class="num">'+oa.ls[l.k].achieved+'/'+oa.ls[l.k].total+'</td>').join('')+
+    '<td class="num">'+oa.weighted.toFixed(1)+'%</td><td class="num">'+oa.overdue+'</td></tr></tbody>';
+  document.getElementById('trancheTbl').innerHTML = h;
+}
+function renderVelocity(){
+  const thisW = weekStart(state.asOf);
+  const weeks = []; for(let i=7;i>=0;i--) weeks.push(addWeeks(thisW,-i));
+  const per = LEVELS.map(l=>({l, data: weeks.map(w=>{
+    const we = addWeeks(w,1); let n=0;
+    state.filtered.forEach(r=>{ const t=r.tags[l.k]; if(t.achieved && t.act>=w && t.act<we) n++; });
+    return n; })}));
+  const totals = weeks.map((_,i)=>per.reduce((a,p)=>a+p.data[i],0));
+  const roll = totals.map((_,i)=>{ const s=Math.max(0,i-3); const sl=totals.slice(s,i+1); return +(sl.reduce((a,b)=>a+b,0)/sl.length).toFixed(1); });
+  upsert('velocity',{
+    data:{labels:weeks.map(w=>'w/c '+fmtDate(w)),
+      datasets: per.map(p=>({type:'bar', label:p.l.k, data:p.data, backgroundColor:cssVar(p.l.varc),
+        borderColor:p.l.k==='L5'?cssVar('--line'):'transparent', borderWidth:p.l.k==='L5'?1:0}))
+        .concat([{type:'line', label:'4-wk rolling avg', data:roll, borderColor:cssVar('--ink-2'),
+          borderWidth:2, pointRadius:2, tension:.3, fill:false}])},
+    options:{ plugins:{legend:{position:'bottom'}},
+      scales:{x:{grid:{display:false}}, y:{beginAtZero:true, grid:{color:gridColor()}, title:{display:true,text:'Tags achieved'}}} }
+  });
+}
+function renderAgeing(){
+  const items = overdueItems(state.filtered);
+  const buckets = [['1–7 days',1,7],['8–14 days',8,14],['15–30 days',15,30],['30+ days',31,1e9]];
+  const perLevel = LEVELS.map(l=>({l, data: buckets.map(b=>items.filter(x=>x.k===l.k && x.age>=b[1] && x.age<=b[2]).length)}));
+
+  const drill = document.getElementById('ageingDrill');
+  if(drill) drill.innerHTML = '';
+
+  const renderDrill = (levelKey, bucketIndex) => {
+    if(!drill) return;
+    const level = LEVELS.find(l=>l.k===levelKey);
+    const b = buckets[bucketIndex];
+    if(!level || !b) return;
+
+    const selected = items
+      .filter(x => x.k===levelKey && x.age>=b[1] && x.age<=b[2])
+      .sort((a,z) => z.age-a.age || String(a.r.eli).localeCompare(String(z.r.eli)));
+
+    const head = document.createElement('div');
+    head.className = 'drill-head';
+    head.innerHTML =
+      '<div><div class="drill-title">'+esc(level.k+' · '+b[0])+'</div>'+
+      '<div class="drill-meta">'+fmtInt(selected.length)+' overdue tag'+(selected.length===1?'':'s')+' · oldest first</div></div>'+
+      '<button type="button" class="drill-clear sm">Clear</button>';
+    head.querySelector('.drill-clear').onclick = () => { drill.innerHTML=''; };
+
+    if(!selected.length){
+      drill.innerHTML='';
+      drill.appendChild(head);
+      const empty=document.createElement('div');
+      empty.className='empty';
+      empty.style.padding='18px';
+      empty.textContent='No overdue tags in this selection.';
+      drill.appendChild(empty);
+      return;
+    }
+
+    const wrap=document.createElement('div');
+    wrap.className='tbl-scroll drill-table';
+    const table=document.createElement('table');
+    table.innerHTML =
+      '<thead><tr>'+
+      '<th>ELI</th><th>Sub-Type</th><th>System</th><th>Area</th>'+
+      '<th>Equipment Supplier</th><th>Level</th><th>Projected</th><th class="num">Ageing (days)</th>'+
+      '</tr></thead><tbody></tbody>';
+
+    const tbody=table.querySelector('tbody');
+    selected.forEach(x=>{
+      const r=x.r;
+      const tr=document.createElement('tr');
+      tr.innerHTML =
+        '<td>'+esc(r.eli)+'</td>'+
+        '<td>'+esc(r.subType)+'</td>'+
+        '<td>'+esc(r.system)+'</td>'+
+        '<td>'+esc(r.area)+'</td>'+
+        '<td>'+esc(r.vendor)+'</td>'+
+        '<td><span class="pill '+esc(x.k==='L1'?'Overdue':x.k==='L2'?'Overdue':x.k==='L3'?'Overdue':x.k==='L4'?'Overdue':'Overdue')+'">'+esc(x.k)+'</span></td>'+
+        '<td>'+fmtDate(x.proj)+'</td>'+
+        '<td class="num">'+fmtInt(x.age)+'</td>';
+      tbody.appendChild(tr);
+    });
+
+    wrap.appendChild(table);
+    drill.innerHTML='';
+    drill.appendChild(head);
+    drill.appendChild(wrap);
+  };
+
+  upsert('ageing',{
+    type:'bar',
+    data:{labels:buckets.map(b=>b[0]),
+      datasets: perLevel.map(p=>({label:p.l.k, data:p.data, backgroundColor:cssVar(p.l.varc), stack:'a',
+        borderColor:p.l.k==='L5'?cssVar('--line'):'transparent', borderWidth:p.l.k==='L5'?1:0}))},
+    options:{
+      onClick:(evt, active)=>{
+        if(!active || !active.length) return;
+        const el=active[0];
+        renderDrill(perLevel[el.datasetIndex].l.k, el.index);
+      },
+      onHover:(evt, active)=>{
+        const canvas=evt.native?.target || document.getElementById('ageing');
+        if(canvas) canvas.style.cursor=active && active.length ? 'pointer' : 'default';
+      },
+      plugins:{legend:{position:'bottom'}},
+      scales:{x:{stacked:true,grid:{display:false}}, y:{stacked:true,beginAtZero:true,grid:{color:gridColor()},title:{display:true,text:'Overdue tags'}}}
+    }
+  });
+}
+function heatClass(p){ return p<40?'var(--heat-red)': p<=75?'var(--heat-amber)':'var(--heat-green)'; }
+
+function renderMatrix(){
+  const dim = state.matrixDim;
+  const groups = groupBy(state.filtered, dim);
+  let arr = [...groups.entries()].map(([name,rs])=>{
+    const o = overall(rs);
+    return {name, rs, o, total:rs.length, pct:o.weighted, overdue:o.overdue};
+  });
+  const ms = state.matrixSort;
+  arr.sort((a,b)=>{
+    let v;
+    if(ms.k==='name') v = String(a.name).localeCompare(String(b.name));
+    else if(ms.k==='total') v = a.total-b.total;
+    else if(ms.k==='overdue') v = a.overdue-b.overdue;
+    else if(ms.k==='pct') v = a.pct-b.pct;
+    else v = pct(a.o.ls[ms.k].achieved,a.o.ls[ms.k].total) - pct(b.o.ls[ms.k].achieved,b.o.ls[ms.k].total);
+    return v*ms.dir;
+  });
+  const th=(k,t,cls)=>'<th class="'+(cls||'')+'" data-sort="'+k+'">'+t+(ms.k===k?(ms.dir>0?' ▲':' ▼'):'')+'</th>';
+  let h='<thead><tr>'+th('name', DIMS.concat([{k:'subType'}]).find(d=>d.k===dim) ? (DIMS.find(d=>d.k===dim)||{t:'Sub-Type'}).t : 'Group')+
+    th('total','Items','num')+LEVELS.map(l=>th(l.k,l.k,'num')).join('')+th('pct','% complete','num')+th('overdue','Overdue','num')+
+    '</tr></thead><tbody>';
+  arr.forEach(g=>{
+    const key = dim+'::'+g.name, open = state.matrixOpen.has(key);
+    h += '<tr data-key="'+esc(key)+'"><td class="drill'+(open?' open':'')+'">'+esc(g.name)+
+      (dim==='subType' && g.rs[0] ? ' <span style="color:var(--muted)">· '+esc(g.rs[0].discipline)+'</span>':'')+'</td>'+
+      '<td class="num">'+fmtInt(g.total)+'</td>'+
+      LEVELS.map(l=>{ const s=g.o.ls[l.k]; const p=pct(s.achieved,s.total);
+        return '<td class="num" style="background:'+(s.total?heatClass(p):'transparent')+'">'+
+          (s.total? s.achieved+'/'+s.total+' <span style="color:var(--muted)">'+p.toFixed(0)+'%</span>'
+                  : '<span style="color:var(--st-skip)">skip</span>')+'</td>'; }).join('')+
+      '<td class="num"><b>'+g.pct.toFixed(1)+'%</b></td>'+
+      '<td class="num" style="color:'+(g.overdue?'var(--st-overdue)':'inherit')+'">'+g.overdue+'</td></tr>';
+    if(open){
+      const sub = dim==='system' ? 'subType' : 'system';
+      groupBy(g.rs, sub).forEach((rs2,n2)=>{
+        const o2 = overall(rs2);
+        const key2 = key+'>>'+n2, open2 = state.matrixOpen.has(key2);
+        h += '<tr class="lvl2" data-key="'+esc(key2)+'"><td class="drill'+(open2?' open':'')+'">'+esc(n2)+'</td>'+
+          '<td class="num">'+rs2.length+'</td>'+
+          LEVELS.map(l=>{const s=o2.ls[l.k];const p=pct(s.achieved,s.total);
+            return '<td class="num" style="background:'+(s.total?heatClass(p):'transparent')+'">'+(s.total?s.achieved+'/'+s.total:'—')+'</td>';}).join('')+
+          '<td class="num">'+o2.weighted.toFixed(1)+'%</td><td class="num">'+o2.overdue+'</td></tr>';
+        if(open2){
+          rs2.slice(0,300).forEach(r=>{
+            h += '<tr class="lvl3"><td>'+esc(r.eli)+' · '+esc(r.area)+'</td><td class="num">1</td>'+
+              LEVELS.map(l=>{const t=r.tags[l.k];
+                return '<td class="num"><span class="pill '+t.cls+'">'+t.cls+'</span></td>';}).join('')+
+              '<td class="num">'+(r.currentLevel/5*100).toFixed(0)+'%</td><td class="num"></td></tr>';
+          });
+          if(rs2.length>300) h+='<tr class="lvl3"><td colspan="9">… '+(rs2.length-300)+' more items (narrow the filters to see them)</td></tr>';
+        }
+      });
+    }
+  });
+  h+='</tbody>';
+  const tbl = document.getElementById('matrixTbl');
+  tbl.innerHTML = h;
+  tbl.querySelectorAll('thead th[data-sort]').forEach(t=>t.onclick=()=>{
+    const k=t.dataset.sort; state.matrixSort = {k, dir: state.matrixSort.k===k ? -state.matrixSort.dir : 1}; renderMatrix();
+  });
+  tbl.querySelectorAll('td.drill').forEach(td=>td.onclick=()=>{
+    const key = td.closest('tr').dataset.key;
+    state.matrixOpen.has(key) ? state.matrixOpen.delete(key) : state.matrixOpen.add(key);
+    renderMatrix();
+  });
+}
+function renderVendor(){
+  const v = vendorStats(state.filtered);
+  const s = state.vendorSort;
+  v.sort((a,b)=>{ const d = (typeof a[s.k]==='string') ? String(a[s.k]).localeCompare(String(b[s.k])) : a[s.k]-b[s.k]; return d*s.dir; });
+
+  // Chart shows every vendor, ordered by scope so the biggest equipment suppliers are never hidden.
+  const chartOrder = v.slice().sort((a,b)=>b.scope-a.scope);
+  const chartBox = document.getElementById('vendorChart').parentElement;
+  chartBox.style.height = Math.max(250, chartOrder.length*26 + 40) + 'px';
+
+  upsert('vendorChart',{
+    type:'bar',
+    data:{labels:chartOrder.map(x=>x.name), datasets:[
+      {label:'On-time hit rate %', data:chartOrder.map(x=>+x.hitRate.toFixed(1)),
+       backgroundColor:chartOrder.map(x=> x.hitRate<40?cssVar('--st-overdue'): x.hitRate<=75?cssVar('--st-late'):cssVar('--st-hit'))},
+      {label:'Overdue tags', data:chartOrder.map(x=>x.overdue), backgroundColor:'rgba(107,114,128,.55)'}
+    ]},
+    options:{ indexAxis:'y', plugins:{legend:{position:'bottom'}},
+      scales:{x:{beginAtZero:true,grid:{color:gridColor()}}, y:{grid:{display:false}, ticks:{autoSkip:false}}} }
+  });
+
+  const th=(k,t,cls)=>'<th class="'+(cls||'')+'" data-sort="'+k+'">'+t+(s.k===k?(s.dir>0?' ▲':' ▼'):'')+'</th>';
+  let h='<thead><tr><th class="nosort">#</th>'+th('name','Equipment Supplier')+th('scope','Scope','num')+th('achieved','Tags achieved','num')+
+    th('hitRate','On-time %','num')+th('avgLate','Avg days late','num')+th('overdue','Overdue','num')+'</tr></thead><tbody>';
+  v.forEach((x,i)=>{
+    const flag = x.hitRate<50 || x.overdue> (v.reduce((a,b)=>a+b.overdue,0)/Math.max(1,v.length))*1.5;
+    h+='<tr'+(flag?' style="background:rgba(198,40,40,.06)"':'')+'><td>'+(i+1)+'</td><td>'+esc(x.name)+(flag?' <span class="pill Overdue">underperforming</span>':'')+'</td>'+
+      '<td class="num">'+fmtInt(x.scope)+'</td><td class="num">'+fmtInt(x.achieved)+'/'+fmtInt(x.total)+'</td>'+
+      '<td class="num">'+x.hitRate.toFixed(1)+'%</td><td class="num">'+x.avgLate.toFixed(1)+'</td>'+
+      '<td class="num" style="color:'+(x.overdue?'var(--st-overdue)':'inherit')+'">'+x.overdue+'</td></tr>';
+  });
+  h+='</tbody>';
+  const tbl=document.getElementById('vendorTbl'); tbl.innerHTML=h;
+  tbl.querySelectorAll('thead th[data-sort]').forEach(t=>t.onclick=()=>{
+    const k=t.dataset.sort; state.vendorSort={k,dir:state.vendorSort.k===k?-state.vendorSort.dir:-1}; renderVendor(); });
+}
+function renderTabTable(){
+  const tbl = document.getElementById('aheadTbl');
+  let h='';
+  if(state.tab==='ahead'){
+    const items = lookAheadItems(state.filtered,14);
+    h='<thead><tr><th class="nosort">ELI Code</th><th class="nosort">Sub-Type</th><th class="nosort">System</th><th class="nosort">Area</th>'+
+      '<th class="nosort">Level</th><th class="nosort">Projected</th><th class="num nosort">Days until due</th>'+
+      '<th class="nosort">Equipment Supplier</th><th class="nosort">Predecessor</th></tr></thead><tbody>';
+    if(!items.length) h+='<tr><td colspan="9" class="empty">Nothing due in the next 14 days for this scope.</td></tr>';
+    items.forEach(x=>{
+      h+='<tr><td>'+esc(x.r.eli)+'</td><td>'+esc(x.r.subType)+'</td><td>'+esc(x.r.system)+'</td><td>'+esc(x.r.area)+'</td>'+
+        '<td><span class="tagdot" style="background:var('+LEVELS.find(l=>l.k===x.k).varc+')"></span>'+x.k+'</td>'+
+        '<td>'+fmtDate(x.proj)+'</td><td class="num">'+x.days+'</td><td>'+esc(x.r.vendor)+'</td>'+
+        '<td>'+(x.risk?'<span class="pill risk">AT RISK — predecessor open</span>':'<span class="pill Hit">clear</span>')+'</td></tr>';
+    });
+  } else if(state.tab==='over'){
+    const items = overdueItems(state.filtered);
+    h='<thead><tr><th class="nosort">ELI Code</th><th class="nosort">Sub-Type</th><th class="nosort">System</th><th class="nosort">Area</th>'+
+      '<th class="nosort">Level</th><th class="nosort">Projected</th><th class="num nosort">Ageing (days)</th><th class="nosort">Bucket</th><th class="nosort">Equipment Supplier</th></tr></thead><tbody>';
+    if(!items.length) h+='<tr><td colspan="9" class="empty">No overdue tags in this scope.</td></tr>';
+    items.slice(0,600).forEach(x=>{
+      const b = x.age<=7?'1–7':x.age<=14?'8–14':x.age<=30?'15–30':'30+';
+      h+='<tr><td>'+esc(x.r.eli)+'</td><td>'+esc(x.r.subType)+'</td><td>'+esc(x.r.system)+'</td><td>'+esc(x.r.area)+'</td>'+
+        '<td><span class="tagdot" style="background:var('+LEVELS.find(l=>l.k===x.k).varc+')"></span>'+x.k+'</td>'+
+        '<td>'+fmtDate(x.proj)+'</td><td class="num" style="color:var(--st-overdue);font-weight:600">'+x.age+'</td>'+
+        '<td>'+b+'</td><td>'+esc(x.r.vendor)+'</td></tr>';
+    });
+    if(items.length>600) h+='<tr><td colspan="9">… '+(items.length-600)+' more overdue tags. Filter to narrow.</td></tr>';
+  } else {
+    const br = sequenceBreaches(state.filtered);
+    const skipped = state.filtered.filter(r=>LK.some(k=>r.tags[k].skipped));
+    h='<thead><tr><th class="nosort">ELI Code</th><th class="nosort">Sub-Type</th><th class="nosort">System</th>'+
+      '<th class="nosort">Issue</th><th class="nosort">Detail</th><th class="nosort">Equipment Supplier</th></tr></thead><tbody>';
+    if(!br.length && !skipped.length) h+='<tr><td colspan="6" class="empty">No sequence breaches or skipped levels detected.</td></tr>';
+    br.forEach(x=>h+='<tr><td>'+esc(x.r.eli)+'</td><td>'+esc(x.r.subType)+'</td><td>'+esc(x.r.system)+'</td>'+
+      '<td><span class="pill Overdue">Out of sequence</span></td><td>'+x.hi+' achieved while '+x.lo+' is still open</td><td>'+esc(x.r.vendor)+'</td></tr>');
+    skipped.slice(0,300).forEach(r=>{
+      const ks = LK.filter(k=>r.tags[k].skipped);
+      h+='<tr><td>'+esc(r.eli)+'</td><td>'+esc(r.subType)+'</td><td>'+esc(r.system)+'</td>'+
+        '<td><span class="pill Skipped">Level skipped</span></td><td>'+ks.join(', ')+' marked skipped in source</td><td>'+esc(r.vendor)+'</td></tr>';
+    });
+  }
+  tbl.innerHTML = h+'</tbody>';
+}
+
+/* --- 6d. Detail table ----------------------------------------------------- */
+function detailColumns(){
+  const base = [
+    {k:'eli',t:'ELI Code'},{k:'tranche',t:'Tranche'},{k:'subType',t:'Sub-Type'},
+    {k:'system',t:'System'},{k:'discipline',t:'Discipline'},{k:'building',t:'Building'},{k:'floor',t:'Floor'},
+    {k:'area',t:'Area'},{k:'vendor',t:'Equipment Supplier'},
+    {k:'eqStatus',t:'Equipment Status'},{k:'currentLevelLabel',t:'Current level'},
+    {k:'energization',t:'Energised', date:true}
+  ];
+  LEVELS.forEach(l=>{
+    base.push({k:l.k+'_proj', t:l.k+' projected', date:true, get:r=>r.tags[l.k].proj});
+    base.push({k:l.k+'_act',  t:l.k+' actual',    date:true, get:r=>r.tags[l.k].act});
+    base.push({k:l.k+'_cls',  t:l.k+' status',    tagCls:l, get:r=>r.tags[l.k].cls});
+    base.push({k:l.k+'_var',  t:l.k+' variance (d)', num:true, get:r=>r.tags[l.k].variance});
+  });
+  return base;
+}
+function cellValue(col,r){
+  const v = col.get ? col.get(r) : r[col.k];
+  if(col.date) return fmtDate(v);
+  return v==null?'':v;
+}
+function buildColPicker(){
+  const cols = detailColumns(), panel = document.getElementById('colPanel');
+  panel.innerHTML = '<div class="ms-actions"><button class="sm" id="colAll">All</button><button class="sm" id="colCore">Core only</button></div>'+
+    cols.map(c=>'<label class="opt"><input type="checkbox" value="'+c.k+'" '+(state.hiddenCols.has(c.k)?'':'checked')+'><span>'+esc(c.t)+'</span></label>').join('');
+  panel.addEventListener('change',e=>{
+    if(e.target.type!=='checkbox') return;
+    e.target.checked ? state.hiddenCols.delete(e.target.value) : state.hiddenCols.add(e.target.value);
+    renderDetail(true);
+  });
+  panel.querySelector('#colAll').onclick=()=>{ state.hiddenCols.clear(); buildColPicker(); renderDetail(true); };
+  panel.querySelector('#colCore').onclick=()=>{
+    state.hiddenCols = new Set(cols.filter(c=>/_proj|_var|^building$|^category$/.test(c.k)).map(c=>c.k));
+    buildColPicker(); renderDetail(true);
+  };
+  const pick = document.getElementById('colPicker');
+  pick.querySelector('button').onclick=e=>{ e.stopPropagation();
+    const open=pick.classList.contains('open');
+    document.querySelectorAll('.ms.open').forEach(m=>m.classList.remove('open'));
+    if(!open) pick.classList.add('open'); };
+}
+function detailRows(){
+  const cols = detailColumns();
+  let rows = state.filtered;
+  const cf = state.colFilters, keys = Object.keys(cf).filter(k=>cf[k]);
+  if(keys.length){
+    rows = rows.filter(r=>keys.every(k=>{
+      const c = cols.find(x=>x.k===k);
+      return String(cellValue(c,r)).toLowerCase().includes(cf[k].toLowerCase());
+    }));
+  }
+  const s = state.detailSort, col = cols.find(c=>c.k===s.k) || cols[0];
+  rows = rows.slice().sort((a,b)=>{
+    let va = col.get?col.get(a):a[col.k], vb = col.get?col.get(b):b[col.k];
+    if(va instanceof Date || vb instanceof Date){ va=va?va.getTime():-Infinity; vb=vb?vb.getTime():-Infinity; }
+    else if(col.num){ va = va==null?-Infinity:va; vb = vb==null?-Infinity:vb; }
+    else { va=String(va==null?'':va); vb=String(vb==null?'':vb); return va.localeCompare(vb,undefined,{numeric:true})*s.dir; }
+    return (va-vb)*s.dir;
+  });
+  return rows;
+}
+function renderDetail(){
+  const cols = detailColumns().filter(c=>!state.hiddenCols.has(c.k));
+  const rows = detailRows();
+  const pages = Math.max(1, Math.ceil(rows.length/state.pageSize));
+  if(state.page>=pages) state.page = pages-1;
+  const slice = rows.slice(state.page*state.pageSize, (state.page+1)*state.pageSize);
+  const s = state.detailSort;
+  let h = '<thead><tr>'+cols.map(c=>'<th data-k="'+c.k+'" class="'+(c.num?'num':'')+'">'+esc(c.t)+(s.k===c.k?(s.dir>0?' ▲':' ▼'):'')+'</th>').join('')+'</tr>'+
+    '<tr>'+cols.map(c=>'<th class="nosort"><input data-f="'+c.k+'" value="'+esc(state.colFilters[c.k]||'')+'" placeholder="filter" style="width:100%;font-size:11px;padding:2px 5px"></th>').join('')+'</tr></thead><tbody>';
+  if(!slice.length) h += '<tr><td colspan="'+cols.length+'" class="empty">No rows match the current filters. Try <b>Reset all</b>.</td></tr>';
+  slice.forEach(r=>{
+    h += '<tr>'+cols.map(c=>{
+      const v = cellValue(c,r);
+      if(c.tagCls) return '<td><span class="tagdot" style="background:var('+c.tagCls.varc+')"></span><span class="pill '+v+'">'+v+'</span></td>';
+      if(c.num) return '<td class="num" style="color:'+(v>0?'var(--st-late)':v<0?'var(--st-hit)':'inherit')+'">'+(v==null?'':(v>0?'+':'')+v)+'</td>';
+      return '<td>'+esc(v)+'</td>';
+    }).join('')+'</tr>';
+  });
+  document.getElementById('detailTbl').innerHTML = h+'</tbody>';
+  document.getElementById('detailCount').textContent = fmtInt(rows.length)+' rows · '+cols.length+' columns shown';
+  document.getElementById('pageInfo').textContent = 'Page '+(state.page+1)+' of '+pages;
+  document.querySelectorAll('#detailTbl thead th[data-k]').forEach(th=>th.onclick=()=>{
+    const k=th.dataset.k; state.detailSort={k, dir: s.k===k ? -s.dir : 1}; renderDetail();
+  });
+  document.querySelectorAll('#detailTbl input[data-f]').forEach(inp=>{
+    inp.oninput = debounce(e=>{ state.colFilters[e.target.dataset.f]=e.target.value; state.page=0; renderDetail(); },350);
+  });
+}
+
+/* =============================================================== 7. INSIGHTS */
+function renderInsights(){
+  const rows = state.filtered, out = [];
+  const add=(sev,txt)=>out.push({sev,txt});
+  if(!rows.length){ document.getElementById('insights').innerHTML='<div class="ins-item">No rows in scope.</div>'; return; }
+  const o = overall(rows);
+
+  // 1 · Schedule slip and forecast impact
+  const sc = sCurveSeries(rows);
+  if(sc && sc.spi!=null){
+    const days = sc.slipWeeks*7;
+    const delta = dayDiff(sc.finishWeek, sc.plannedFinish);
+    if(sc.spi<0.95) add('critical','Programme is behind plan: SPI '+sc.spi.toFixed(2)+' — '+
+      fmtInt(Math.max(0,(sc.planned[sc.iNow]||0)-(sc.actual[sc.iNow]||0)))+' tags short of the curve, ≈'+days+
+      ' days of slip. At the current '+sc.rate.toFixed(1)+' tags/week the forecast finish is '+fmtDate(sc.finishWeek)+
+      ', '+Math.abs(delta)+' days '+(delta>0?'later than':'ahead of')+' plan.');
+    else if(sc.spi>1.02) add('positive','Ahead of the curve: SPI '+sc.spi.toFixed(2)+' with '+
+      fmtInt((sc.actual[sc.iNow]||0)-(sc.planned[sc.iNow]||0))+' tags banked above plan.');
+    else add('watch','Tracking to plan: SPI '+sc.spi.toFixed(2)+', run-rate '+sc.rate.toFixed(1)+' tags/week.');
+
+    // 6 · Required recovery rate
+    const remaining = sc.totalPlanned - (sc.actual[sc.iNow]||0);
+    const weeksLeft = Math.max(1, Math.round(dayDiff(sc.plannedFinish, state.asOf)/7));
+    const need = remaining/weeksLeft;
+    if(remaining>0) add(need>sc.rate*1.15?'critical':'watch',
+      'Recovery maths: '+fmtInt(Math.round(remaining))+' tags remain over '+weeksLeft+' weeks to the planned finish — '+
+      need.toFixed(1)+' tags/week required vs '+sc.rate.toFixed(1)+' actual ('+
+      (need>sc.rate ? ((need/Math.max(sc.rate,0.01)).toFixed(1)+'× the current rate') : 'within current capacity')+').');
+  }
+
+  // 2 · Bottleneck level
+  let drop = {from:null,to:null,n:-1};
+  for(let i=0;i<LK.length-1;i++){
+    const a=o.ls[LK[i]].achieved, b=o.ls[LK[i+1]].achieved;
+    if(a-b>drop.n) drop={from:LK[i],to:LK[i+1],n:a-b, a, b};
+  }
+  if(drop.n>0) add(drop.n > rows.length*0.4 ? 'critical':'watch',
+    'Bottleneck at '+drop.from+' → '+drop.to+': '+fmtInt(drop.n)+' items hold '+drop.from+
+    ' but not '+drop.to+' ('+fpct(drop.b,drop.a)+' conversion). This is where equipment is piling up.');
+
+  // 3 · Worst performers by group
+  const worst = (dim,title)=>{
+    const g = groupBy(rows,dim); let w=null;
+    g.forEach((rs,name)=>{ if(rs.length<Math.max(3,rows.length*0.02)) return;
+      const p = overall(rs).weighted; if(!w||p<w.p) w={name,p,n:rs.length}; });
+    if(w) add(w.p<35?'critical':'watch', title+' furthest behind: '+w.name+' at '+w.p.toFixed(1)+
+      '% weighted completion across '+fmtInt(w.n)+' items — '+(o.weighted-w.p).toFixed(1)+' pts below the '+o.weighted.toFixed(1)+'% scope average.');
+  };
+  worst('subType','Equipment type');
+  worst('area','Area');
+  worst('vendor','Equipment Supplier');
+
+  // 4 · Sequence breaches and skips
+  const br = sequenceBreaches(rows);
+  const skipRows = rows.filter(r=>LK.some(k=>r.tags[k].skipped));
+  if(br.length) add('critical','Sequence integrity: '+fmtInt(br.length)+' item'+(br.length>1?'s have':' has')+
+    ' a higher tag signed off while a lower level is still open — verify the tag records before they flow into IST.');
+  if(skipRows.length) add('watch', fmtInt(skipRows.length)+' items carry an explicit "skipped" level in the source and are excluded from those denominators — confirm the skips are formally approved.');
+
+  // 5 · Concentration risk
+  const conc = (dim,title)=>{
+    const items = overdueItems(rows); if(items.length<5) return;
+    const m = new Map(); items.forEach(x=>m.set(x.r[dim],(m.get(x.r[dim])||0)+1));
+    let top=null; m.forEach((n,k)=>{ if(!top||n>top.n) top={k,n}; });
+    const share = pct(top.n, items.length);
+    if(share>=35) add('critical','Concentration risk: '+title+' '+top.k+' holds '+top.n+' of '+items.length+
+      ' overdue tags ('+share.toFixed(0)+'%) — a single point of recovery leverage.');
+  };
+  conc('vendor','equipment supplier'); conc('area','area'); conc('system','system');
+
+  // 6 · Trend
+  const thisW = weekStart(state.asOf);
+  const w = [3,2,1,0].map(i=>countInWeek(rows, addWeeks(thisW,-i-1)));
+  const firstHalf=(w[0]+w[1])/2, secondHalf=(w[2]+w[3])/2;
+  const trend = secondHalf>firstHalf*1.15?'accelerating': secondHalf<firstHalf*0.85?'decelerating':'flat';
+  add(trend==='decelerating'?'critical':trend==='accelerating'?'positive':'watch',
+    'Achievement rate is '+trend+': last four weeks ran '+w.join(', ')+' tags ('+firstHalf.toFixed(1)+
+    ' → '+secondHalf.toFixed(1)+' per week).');
+
+  // 7 · Overdue headline
+  if(o.overdue) add(o.overduePctOpen>30?'critical':'watch',
+    fmtInt(o.overdue)+' overdue tags — '+o.overduePctOpen.toFixed(1)+'% of all open tags. Oldest is '+
+    (overdueItems(rows)[0]||{age:0}).age+' days past its projected date.');
+
+  // 8 · Data quality
+  const dq = dataQualityIssues(rows);
+  if(dq.length) add('data','Data quality: '+dq.join(' · ')+'.');
+
+  document.getElementById('insights').innerHTML = out.slice(0,9).map(i=>
+    '<div class="ins-item"><span class="sev '+(i.sev==='data'?'data':i.sev)+'">'+
+    (i.sev==='data'?'Data':i.sev)+'</span><span>'+i.txt+'</span></div>').join('');
+}
+function dataQualityIssues(rows){
+  const out=[];
+  let noProj=0, implausible=0, blankVendor=0, blankArea=0;
+  const seen = new Set(), dupes = new Set();
+  rows.forEach(r=>{
+    if(seen.has(r.eli)) dupes.add(r.eli); else seen.add(r.eli);
+    if(r.vendor===BLANK) blankVendor++;
+    if(r.area===BLANK) blankArea++;
+    LK.forEach(k=>{ const t=r.tags[k];
+      if(!t.skipped && !t.proj && !t.achieved) noProj++;
+      if(t.variance!=null && t.variance < -60) implausible++;
+    });
+  });
+  if(noProj) out.push(fmtInt(noProj)+' open tags with no projected date');
+  if(implausible) out.push(fmtInt(implausible)+' actuals more than 60 days before their projected date');
+  if(dupes.size) out.push(dupes.size+' duplicate ELI codes');
+  if(blankVendor) out.push(blankVendor+' rows with no equipment supplier');
+  if(blankArea) out.push(blankArea+' rows with no area');
+  if(state.unparsed) out.push(state.unparsed+' unparsable date cells (treated as not achieved)');
+  if(state.projectedStats){
+    if(state.projectedStats.unmatchedEquipment) out.push(state.projectedStats.unmatchedEquipment+' equipment rows have no matching projected-date ELI');
+    if(state.projectedStats.duplicateProjectedRows) out.push(state.projectedStats.duplicateProjectedRows+' duplicate projected-date rows collapsed by ELI');
+  }
+  return out;
+}
+function runDataQuality(){
+  const cm = state.columnMap;
+  if(state.projectedStats){
+    const p=state.projectedStats;
+    document.getElementById('dqBody').innerHTML =
+      '<div style="font-size:11.5px;color:var(--muted);margin:8px 0">'+
+      'Hosted sources: <b>'+esc(HOSTED_DATA.equipmentUrl)+'</b> and <b>'+esc(HOSTED_DATA.projectedUrl)+'</b> · '+
+      'Projected ELIs: '+fmtInt(p.projectedRows)+' · matched equipment: '+fmtInt(p.matchedEquipment)+
+      ' · unmatched: '+fmtInt(p.unmatchedEquipment)+
+      (p.duplicateProjectedRows?' · duplicate projected rows collapsed: '+fmtInt(p.duplicateProjectedRows):'')+
+      '</div>';
+  }
+  if(!cm.labels){ document.getElementById('dqBody').innerHTML=''; return; }
+  const inv = {};
+  Object.keys(cm.map).forEach(k=>{ if(k!=='tags' && cm.map[k]!==undefined) inv[cm.map[k]] = k; });
+  LEVELS.forEach(l=>{ const s=cm.map.tags[l.k];
+    if(s.proj>=0) inv[s.proj]=l.k+'.projected';
+    if(s.act>=0)  inv[s.act] =l.k+'.actual';
+    if(s.status>=0) inv[s.status]=l.k+'.status'; });
+  let h='<div style="font-size:11.5px;color:var(--muted);margin:8px 0">'+
+    (cm.sourceType?('<b>Source:</b> '+esc(cm.sourceType)+' · '):'')+
+    'Header detected on row '+(cm.headerIndex+1)+
+    '. Unmapped columns are ignored.</div><div class="tbl-scroll" style="max-height:240px"><table><thead><tr>'+
+    '<th class="nosort">Col</th><th class="nosort">Header in file</th><th class="nosort">Bound to</th></tr></thead><tbody>';
+  cm.labels.forEach((l,i)=>{ if(!l) return;
+    h+='<tr><td>'+i+'</td><td>'+esc(l)+'</td><td>'+(inv[i]?'<b>'+inv[i]+'</b>':'<span style="color:var(--muted)">—</span>')+'</td></tr>'; });
+  document.getElementById('dqBody').innerHTML = h+'</tbody></table></div>';
+}
+
+/* ================================================================= 8. EXPORT */
+function exportCSV(){
+  const cols = detailColumns().filter(c=>!state.hiddenCols.has(c.k));
+  const rows = detailRows();
+  const q = v => '"'+String(v==null?'':v).replace(/"/g,'""')+'"';
+  const lines = [cols.map(c=>q(c.t)).join(',')];
+  rows.forEach(r=>lines.push(cols.map(c=>q(cellValue(c,r))).join(',')));
+  const blob = new Blob(['\ufeff'+lines.join('\r\n')], {type:'text/csv;charset=utf-8;'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'cx-register-filtered-'+fmtDate(state.asOf)+'.csv';
+  a.click(); URL.revokeObjectURL(a.href);
+}
+
+
+/* ======================================================= 8.5 HOSTED DATA */
+function parseDateSafe(v, bad){
+  return parseDate(v, bad);
+}
+function txtValue(v){
+  return String(v==null?'':v).replace(/\s+/g,' ').trim();
+}
+
+/** Normalise the live CxAlloy equipment-status CSV into the dashboard schema. */
+function ingestHostedEquipment(rows, sourceName){
+  const bad = {n:0};
+  const clean = (rows||[]).filter(r => r && txtValue(r.name));
+  const out = clean.map(r=>{
+    const rec = {
+      eli: txtValue(r.name),
+      tranche: txtValue(r.tranche) || BLANK,
+      subType: txtValue(r.type) || BLANK,
+      system: txtValue(r.systems) || BLANK,
+      discipline: txtValue(r.discipline) || BLANK,
+      building: txtValue(r.building) || BLANK,
+      floor: txtValue(r.floor) || BLANK,
+      area: txtValue(r.space) || BLANK,
+      vendor: normalizeVendor(txtValue(r.equipment_supplier) || BLANK) || BLANK,
+      eqStatus: txtValue(r.status) || 'NO TAG',
+      energization: parseDateSafe(r.energized_date, bad),
+      tags: {
+        L1:{proj:null, act:parseDateSafe(r.l1_red_tag_date,bad), src:txtValue(r.status), skipped:false, present:true},
+        L2:{proj:null, act:parseDateSafe(r.l2_yellow_tag_date,bad), src:txtValue(r.status), skipped:false, present:true},
+        L3:{proj:null, act:parseDateSafe(r.l3_green_tag_date,bad), src:txtValue(r.status), skipped:false, present:true},
+        L4:{proj:null, act:parseDateSafe(r.l4_blue_tag_date,bad), src:txtValue(r.status), skipped:false, present:true},
+        L5:{proj:null, act:parseDateSafe(r.l5_white_tag_date,bad), src:txtValue(r.status), skipped:false, present:true}
+      }
+    };
+    // Preserve source identifiers for diagnostics/export/debugging without changing
+    // the existing dashboard field model.
+    rec.source = {
+      equipmentId: txtValue(r.equipment_id),
+      projectId: txtValue(r.project_id),
+      currentStage: txtValue(r.current_stage),
+      currentStageDate: parseDateSafe(r.current_stage_date,bad),
+      lastSynced: txtValue(r.last_synced)
+    };
+    return rec;
+  });
+
+  const labels = Object.keys(clean[0]||{});
+  const idx = n => labels.indexOf(n);
+  const map = {
+    eli:idx('name'), tranche:idx('tranche'), subType:idx('type'),
+    system:idx('systems'), discipline:idx('discipline'), building:idx('building'), floor:idx('floor'),
+    area:idx('space'), vendor:idx('equipment_supplier'), eqStatus:idx('status'),
+    energization:idx('energized_date'), tags:{}
+  };
+  const pairs = [['L1','l1_red_tag_date'],['L2','l2_yellow_tag_date'],['L3','l3_green_tag_date'],
+                 ['L4','l4_blue_tag_date'],['L5','l5_white_tag_date']];
+  pairs.forEach(([k,col])=>map.tags[k]={proj:-1,act:idx(col),status:idx('status')});
+  state.columnMap = {
+    labels, map, headerIndex:0, sourceName,
+    sourceType:'CxAlloy equipment_status.csv'
+  };
+  state.unparsed = bad.n;
+  return out;
+}
+
+/** Read the KUL21 projected-date workbook and collapse duplicate ELIs. */
+function readProjectedWorkbook(arrayBuffer){
+  const wb = XLSX.read(new Uint8Array(arrayBuffer), {type:'array', cellDates:true});
+  const sh = wb.SheetNames[0];
+  const aoa = XLSX.utils.sheet_to_json(wb.Sheets[sh], {header:1, raw:true, defval:''});
+  const hdr = aoa.findIndex(r => (r||[]).some(c => /Name ELI Code/i.test(String(c||''))));
+  if(hdr<0) throw new Error('Could not find "Name ELI Code" in projected-date workbook.');
+  const headers = aoa[hdr].map(c=>String(c||'').trim());
+  const ix = n => headers.indexOf(n);
+  const keyIx = ix('Name ELI Code');
+  const redIx = ix('RED Tag Revised Projected Date');
+  const yelIx = ix('YELLOW Tag Revised Projected Date');
+  const grnIx = ix('GREEN Tag Revised Projected Date');
+  if(keyIx<0 || redIx<0 || yelIx<0 || grnIx<0){
+    throw new Error('Projected-date workbook is missing one or more expected columns.');
+  }
+
+  const bad={n:0}, map=new Map();
+  let duplicateRows=0;
+  for(let i=hdr+1;i<aoa.length;i++){
+    const r=aoa[i]||[];
+    const eli=txtValue(r[keyIx]);
+    if(!eli) continue;
+    if(map.has(eli)) duplicateRows++;
+    const prev=map.get(eli)||{};
+    const next={
+      L1: parseDateSafe(r[redIx],bad) || prev.L1 || null,
+      L2: parseDateSafe(r[yelIx],bad) || prev.L2 || null,
+      L3: parseDateSafe(r[grnIx],bad) || prev.L3 || null
+    };
+    map.set(eli,next);
+  }
+  return {
+    map, bad:bad.n, duplicateRows,
+    rowCount: map.size,
+    headers
+  };
+}
+
+/** Apply projected L1-L3 dates to live equipment rows. L4/L5 stay blank until supplied. */
+function mergeProjectedDates(rows, projected){
+  let matched=0;
+  rows.forEach(r=>{
+    const p=projected.map.get(r.eli);
+    if(!p) return;
+    matched++;
+    r.tags.L1.proj=p.L1;
+    r.tags.L2.proj=p.L2;
+    r.tags.L3.proj=p.L3;
+  });
+  state.projectedStats = {
+    projectedRows: projected.rowCount,
+    matchedEquipment: matched,
+    unmatchedEquipment: Math.max(0, rows.length-matched),
+    duplicateProjectedRows: projected.duplicateRows,
+    projectedUnparsed: projected.bad
+  };
+}
+
+async function loadHostedData(){
+  showSkeleton();
+  const hdr = document.getElementById('hdrSub');
+  hdr.textContent = 'Loading hosted commissioning data…';
+  try{
+    const [equipmentRes, projectedRes] = await Promise.all([
+      fetch(HOSTED_DATA.equipmentUrl, {cache:'no-store'}),
+      fetch(HOSTED_DATA.projectedUrl, {cache:'no-store'})
+    ]);
+    if(!equipmentRes.ok) throw new Error('Equipment CSV returned HTTP '+equipmentRes.status);
+    if(!projectedRes.ok) throw new Error('Projected-date file returned HTTP '+projectedRes.status);
+
+    const csvText = await equipmentRes.text();
+    const equipment = await new Promise((resolve,reject)=>{
+      Papa.parse(csvText,{
+        header:true,
+        skipEmptyLines:'greedy',
+        complete:res=>resolve(res.data),
+        error:err=>reject(err)
+      });
+    });
+
+    const projectedBuffer = await projectedRes.arrayBuffer();
+    const projected = readProjectedWorkbook(projectedBuffer);
+    const rows = ingestHostedEquipment(equipment, HOSTED_DATA.equipmentUrl);
+    mergeProjectedDates(rows, projected);
+    transform(rows);
+
+    const p = state.projectedStats;
+    document.getElementById('hdrSub').textContent =
+      fmtInt(state.filtered.length)+' of '+fmtInt(state.rows.length)+' items in scope · hosted CSV + projected dates · as of '+fmtDate(state.asOf);
+  }catch(err){
+    console.error(err);
+    document.getElementById('hdrSub').textContent = 'Hosted data failed to load — use manual override or check the file paths.';
+    document.getElementById('insights').innerHTML =
+      '<div class="ins-item"><span class="sev critical">Error</span><span>'+
+      esc(err && err.message || err)+
+      '</span></div>';
+  }
+}
+
+/** Manual override for the current equipment CSV. Projected dates remain hosted. */
+function handleHostedEquipmentOverride(file){
+  if(!file) return;
+  showSkeleton();
+  document.getElementById('hdrSub').textContent = 'Parsing '+file.name+'…';
+  Papa.parse(file,{
+    header:true,
+    skipEmptyLines:'greedy',
+    complete: async res=>{
+      try{
+        const projectedRes = await fetch(HOSTED_DATA.projectedUrl, {cache:'no-store'});
+        if(!projectedRes.ok) throw new Error('Could not load hosted projected-date file (HTTP '+projectedRes.status+').');
+        const projected = readProjectedWorkbook(await projectedRes.arrayBuffer());
+        const rows = ingestHostedEquipment(res.data, file.name);
+        mergeProjectedDates(rows, projected);
+        transform(rows);
+      }catch(e){ fail(e); }
+    },
+    error:fail
+  });
+}
+
+/* ============================================================ 9. FILE INTAKE */
+function showSkeleton(){
+  document.getElementById('insights').innerHTML =
+    Array.from({length:4}).map(()=>'<div class="ins-item"><div class="skeleton" style="width:100%"></div></div>').join('');
+}
+function handleFile(file){
+  if(!file) return;
+  showSkeleton();
+  document.getElementById('hdrSub').textContent = 'Parsing '+file.name+'…';
+  const ext = (file.name.split('.').pop()||'').toLowerCase();
+  if(ext==='csv'){
+    Papa.parse(file,{skipEmptyLines:'greedy', complete:res=>{
+      try{ ingestAOA(res.data, file.name); }catch(e){ fail(e); }
+    }, error:fail});
+  } else {
+    const fr = new FileReader();
+    fr.onload = e=>{
+      try{
+        const wb = XLSX.read(new Uint8Array(e.target.result), {type:'array', cellDates:true});
+        // Pick the sheet that looks most like the register.
+        let best=null, bestScore=-1;
+        wb.SheetNames.forEach(n=>{
+          const aoa = XLSX.utils.sheet_to_json(wb.Sheets[n], {header:1, raw:true, defval:''});
+          let s = 0;
+          for(let i=0;i<Math.min(12,aoa.length);i++) s = Math.max(s, scoreHeaderRow(aoa[i]));
+          s += Math.min(10, aoa.length/100);
+          if(s>bestScore){ bestScore=s; best=aoa; }
+        });
+        ingestAOA(best||[], file.name);
+      }catch(err){ fail(err); }
+    };
+    fr.onerror = fail;
+    fr.readAsArrayBuffer(file);
+  }
+}
+function fail(e){
+  console.error(e);
+  document.getElementById('hdrSub').textContent = 'Could not parse that file — check it is a .xlsx or .csv register export.';
+  document.getElementById('insights').innerHTML =
+    '<div class="ins-item"><span class="sev critical">Error</span><span>Parse failed: '+esc(e&&e.message||e)+'</span></div>';
+}
+
+/* ============================================== 10. EMBEDDED SAMPLE DATASET */
+/** Generates a realistic register as an AOA so it exercises the real parser. */
+function sampleAOA(){
+  const hdr = ['Name ELI Code','Tranche','Sub-Code','Sub-Type','System','Discipline','Building','Floor','Area',
+    'Equipment Supplier','Category','Equipment Status',
+    'RED Tag Revised Projected Date','RED Tag Actual Date','Tag Status',
+    'YELLOW Tag Revised Projected Date','YELLOW Tag Actual Date','Status',
+    'Energization Actual Date',
+    'GREEN Tag Revised Projected Date','GREEN Tag Actual Date','Status',
+    'BLUE Tag Projected Date','BLUE Tag Actual Date','Status',
+    'WHITE Tag Projected Date','WHITE Tag Actual Date','Status'];
+  const fams = [
+    ['ACS','Variable Refrigerant Unit','Mechanical','KUL21ACMV System'],
+    ['CHW','Chilled Water Pump','Mechanical','KUL21CHW System'],
+    ['CDU','Coolant Distribution Unit','Mechanical','KUL21TCS System'],
+    ['UPS','UPS Module','Electrical','KUL21UPS System'],
+    ['SWG','LV Switchgear','Electrical','KUL21LVS System'],
+    ['TRF','33kV Cast Resin Transformer','Electrical','KUL21MVS System'],
+    ['GEN','Standby Generator','Electrical','KUL21GEN System'],
+    ['CPM','Controls Panel Module','Controls','KUL21BMS System']
+  ];
+  const vendors = ['PROMATRIX DCS','MN UTILITIES ENGINEERING','SIEMENS ENERGY','APEX CONTROLS SB','DELTA MECH SB'];
+  const floors  = ['L1','L2','L3','L4'];
+  const areas   = ['BATTERY ROOM AA','BATTERY ROOM AB','MMR 01','ITR & SER 01','ITR & SER 02','ECX STORAGE',
+                   'DATA HALL 1','DATA HALL 2','CHILLER YARD','EU CORRIDOR'];
+  const rnd = mulberry32(20260819);
+  const pick = a => a[Math.floor(rnd()*a.length)];
+  const today = startOfDay(new Date());
+  const fd = d => fmtDate(d);
+  const rows = [hdr];
+  for(let i=0;i<420;i++){
+    const f = pick(fams), tr = rnd()<0.62?'T1':'T2', v = pick(vendors);
+    const eli = 'EDCKUL21'+f[0]+String(1000+i).padStart(5,'0');
+    const base = addDays(today, -160 + Math.floor(rnd()*220) + (tr==='T2'?55:0));
+    const proj = [base, addDays(base,26), addDays(base,52), addDays(base,80), addDays(base,104)];
+    const luck = rnd();
+    let reached = luck<0.16?0 : luck<0.48?1 : luck<0.72?2 : luck<0.88?3 : luck<0.96?4 : 5;
+    const skipL4 = f[0]==='ACS' && rnd()<0.75;
+    const skipL5 = skipL4 && rnd()<0.6;
+    const act = [];
+    for(let L=0; L<reached; L++){
+      if(proj[L] > today){ reached = L; break; }
+      const drift = Math.floor(rnd()*26) - 6;                    // mostly late, sometimes early
+      const a = addDays(proj[L], drift);
+      if(a > today){ reached = L; break; }
+      act[L] = a;
+    }
+    const cells = [eli, tr, f[0], f[1], f[3], f[2], 'KUL21-DC Building', pick(floors), pick(areas), v, 'MRC',
+      reached===0 ? 'NO TAG' : 'L'+reached+' '+['RED','YELLOW','GREEN','BLUE','WHITE'][reached-1]+' TAG'];
+    const statusFor = (L)=>{
+      if(L===3 && skipL4) return 'L4 skipped';
+      if(L===4 && skipL5) return 'L5 skipped';
+      if(act[L]) return act[L] > proj[L] ? 'Completed Late' : 'Hit';
+      return proj[L] < today ? 'Overdue' : 'Pending';
+    };
+    // RED block
+    cells.push(fd(proj[0]), act[0]?fd(act[0]):'', statusFor(0));
+    // YELLOW block
+    cells.push(fd(proj[1]), act[1]?fd(act[1]):'', statusFor(1));
+    // Energisation
+    cells.push(act[2] ? fd(addDays(act[2],-2)) : '');
+    // GREEN / BLUE / WHITE blocks
+    cells.push(fd(proj[2]), act[2]?fd(act[2]):'', statusFor(2));
+    cells.push(fd(proj[3]), (!skipL4 && act[3])?fd(act[3]):'', statusFor(3));
+    cells.push(fd(proj[4]), (!skipL5 && act[4])?fd(act[4]):'', statusFor(4));
+    rows.push(cells);
+  }
+  return rows;
+}
+
+
+/* ===================================================== CHECKLIST COMPLETION */
+const CHECKLIST_DATA = {
+  currentUrl:'./data/checklist_completion_by_equipment.csv',
+  dailyUrl:'./data/checklist_progress_daily.csv'
+};
+
+const checklistState = {
+  current:[], daily:[], filtered:[], page:0, pageSize:100,
+  q:'', tranche:'ALL', discipline:'ALL', system:'ALL', supplier:'ALL',
+  trendMode:'daily', trendLevel:'Overall', loaded:false
+};
+
+function clNum(v){ const n=Number(v); return Number.isFinite(n)?n:0; }
+function clPctCell(v){
+  if(v===null || v===undefined || String(v).trim()==='') return '<span style="color:var(--muted)">—</span>';
+  const n=Number(v); if(!Number.isFinite(n)) return '—';
+  const bg=n<40?'var(--heat-red)':n<=75?'var(--heat-amber)':'var(--heat-green)';
+  return '<span style="display:inline-block;min-width:58px;text-align:right;padding:2px 6px;border-radius:5px;background:'+bg+'">'+n.toFixed(1)+'%</span>';
+}
+function clUnique(key){ return uniqSorted(checklistState.current.map(r=>txtValue(r[key])).filter(Boolean)); }
+function clFillSelect(id, vals){
+  const el=document.getElementById(id); if(!el) return;
+  el.innerHTML='<option value="ALL">All</option>'+vals.map(v=>'<option value="'+esc(v)+'">'+esc(v)+'</option>').join('');
+}
+function clBuildFilters(){
+  clFillSelect('clTranche',clUnique('tranche'));
+  clFillSelect('clDiscipline',clUnique('discipline'));
+  clFillSelect('clSystem',clUnique('systems'));
+  clFillSelect('clSupplier',clUnique('equipment_supplier'));
+}
+function clApplyFilters(){
+  const s=checklistState, q=s.q.trim().toUpperCase();
+  s.filtered=s.current.filter(r=>{
+    if(q && !txtValue(r.asset_name).toUpperCase().includes(q)) return false;
+    if(s.tranche!=='ALL' && txtValue(r.tranche)!==s.tranche) return false;
+    if(s.discipline!=='ALL' && txtValue(r.discipline)!==s.discipline) return false;
+    if(s.system!=='ALL' && txtValue(r.systems)!==s.system) return false;
+    if(s.supplier!=='ALL' && txtValue(r.equipment_supplier)!==s.supplier) return false;
+    return true;
+  });
+  s.page=0;
+}
+function clLevelStats(rows, level){
+  const tp=level==='Overall'?'overall_total_lines':level+'_total_lines';
+  const cp=level==='Overall'?'overall_completed_lines':level+'_completed_lines';
+  let total=0, completed=0, eq=0;
+  rows.forEach(r=>{
+    const t=clNum(r[tp]), c=clNum(r[cp]);
+    if(t>0) eq++;
+    total+=t; completed+=c;
+  });
+  return {total,completed,open:Math.max(0,total-completed),eq,p:total?completed/total*100:0};
+}
+function clRenderKPIs(){
+  const box=document.getElementById('clKpis'); if(!box) return;
+  const levels=['Overall','L1','L2','L3','L4','L5'];
+  box.innerHTML=levels.map(level=>{
+    const x=clLevelStats(checklistState.filtered,level);
+    const label=level==='Overall'?'Overall checklist completion':level+' checklist completion';
+    const color=level==='Overall'?'var(--accent)':cssVar((LEVELS.find(l=>l.k===level)||{}).varc||'--accent');
+    return '<div class="kpi" style="cursor:default"><div class="k-label">'+label+'</div>'+
+      '<div class="k-val">'+x.p.toFixed(1)+'<small>%</small></div>'+
+      '<div class="bar"><i style="width:'+Math.min(100,x.p).toFixed(1)+'%;background:'+color+'"></i></div>'+
+      '<div class="k-sub">'+fmtInt(x.completed)+' / '+fmtInt(x.total)+' lines · '+fmtInt(x.eq)+' equipment</div></div>';
+  }).join('');
+}
+function clFilteredDaily(){
+  const ids=new Set(checklistState.filtered.map(r=>txtValue(r.project_id)));
+  return checklistState.daily.filter(r=>ids.has(txtValue(r.project_id)) && txtValue(r.commissioning_level)===checklistState.trendLevel);
+}
+function clTrendPoints(){
+  const rows=clFilteredDaily();
+  const by=new Map();
+  rows.forEach(r=>{
+    const d=txtValue(r.snapshot_date); if(!d) return;
+    if(!by.has(d)) by.set(d,{completed:0,total:0,week:txtValue(r.week_start)});
+    const x=by.get(d); x.completed+=clNum(r.completed_lines); x.total+=clNum(r.total_lines);
+  });
+  let pts=[...by.entries()].map(([date,x])=>({date,week:x.week,p:x.total?x.completed/x.total*100:0,total:x.total,completed:x.completed})).sort((a,b)=>a.date.localeCompare(b.date));
+  if(checklistState.trendMode==='weekly'){
+    const w=new Map();
+    pts.forEach(p=>w.set(p.week,p));
+    pts=[...w.values()].sort((a,b)=>a.date.localeCompare(b.date));
+  }
+  return pts;
+}
+function clRenderTrend(){
+  const pts=clTrendPoints();
+  upsert('checklistTrend',{
+    type:'line',
+    data:{labels:pts.map(p=>p.date),datasets:[{
+      label:checklistState.trendLevel+' completion %', data:pts.map(p=>+p.p.toFixed(2)),
+      borderColor:cssVar('--accent'),backgroundColor:'rgba(45,127,249,.10)',borderWidth:2.5,pointRadius:3,tension:.25,fill:true
+    }]},
+    options:{plugins:{legend:{display:false},tooltip:{callbacks:{label:c=>c.parsed.y.toFixed(2)+'%'}}},
+      scales:{x:{grid:{display:false}},y:{beginAtZero:true,max:100,grid:{color:gridColor()},ticks:{callback:v=>v+'%'},title:{display:true,text:'Checklist completion'}}}}
+  });
+}
+function clRenderTable(){
+  const s=checklistState, rows=s.filtered.slice().sort((a,b)=>txtValue(a.asset_name).localeCompare(txtValue(b.asset_name),undefined,{numeric:true}));
+  const pages=Math.max(1,Math.ceil(rows.length/s.pageSize)); if(s.page>=pages)s.page=pages-1;
+  const slice=rows.slice(s.page*s.pageSize,(s.page+1)*s.pageSize);
+  let h='<thead><tr><th>ELI</th><th>Tranche</th><th>Discipline</th><th>System</th><th>Equipment Supplier</th>'+
+    '<th class="num">L1</th><th class="num">L2</th><th class="num">L3</th><th class="num">L4</th><th class="num">L5</th><th class="num">Overall</th></tr></thead><tbody>';
+  if(!slice.length) h+='<tr><td colspan="11" class="empty">No equipment matches the current checklist filters.</td></tr>';
+  slice.forEach(r=>{
+    h+='<tr><td><b>'+esc(r.asset_name)+'</b></td><td>'+esc(r.tranche)+'</td><td>'+esc(r.discipline)+'</td><td>'+esc(r.systems)+'</td><td>'+esc(r.equipment_supplier)+'</td>'+
+      ['L1','L2','L3','L4','L5'].map(k=>'<td class="num">'+clPctCell(r[k+'_completion_pct'])+'</td>').join('')+
+      '<td class="num"><b>'+clPctCell(r.overall_completion_pct)+'</b></td></tr>';
+  });
+  h+='</tbody>';
+  document.getElementById('clTable').innerHTML=h;
+  document.getElementById('clTableMeta').textContent=fmtInt(rows.length)+' equipment in scope · snapshot '+(slice[0]?.snapshot_date||'—');
+  document.getElementById('clPageInfo').textContent='Page '+(s.page+1)+' of '+pages;
+  document.getElementById('clPrev').disabled=s.page<=0;
+  document.getElementById('clNext').disabled=s.page>=pages-1;
+}
+function clRefresh(){ clApplyFilters(); clRenderKPIs(); clRenderTrend(); clRenderTable(); }
+async function loadChecklistData(){
+  try{
+    const [curRes,dailyRes]=await Promise.all([
+      fetch(CHECKLIST_DATA.currentUrl,{cache:'no-store'}),fetch(CHECKLIST_DATA.dailyUrl,{cache:'no-store'})
+    ]);
+    if(!curRes.ok) throw new Error('Checklist equipment snapshot returned HTTP '+curRes.status);
+    if(!dailyRes.ok) throw new Error('Checklist trend file returned HTTP '+dailyRes.status);
+    const parse=text=>new Promise((resolve,reject)=>Papa.parse(text,{header:true,skipEmptyLines:'greedy',complete:r=>resolve(r.data),error:reject}));
+    checklistState.current=await parse(await curRes.text());
+    checklistState.daily=await parse(await dailyRes.text());
+    checklistState.loaded=true;
+    clBuildFilters(); clRefresh();
+  }catch(err){
+    console.error(err);
+    const t=document.getElementById('clTable');
+    if(t) t.innerHTML='<tbody><tr><td class="empty">Checklist data failed to load: '+esc(err.message||err)+'</td></tr></tbody>';
+  }
+}
+function wireChecklistPage(){
+  const q=document.getElementById('clQ'); if(!q) return;
+  q.oninput=debounce(e=>{checklistState.q=e.target.value;clRefresh();},250);
+  document.getElementById('clTranche').onchange=e=>{checklistState.tranche=e.target.value;clRefresh();};
+  document.getElementById('clDiscipline').onchange=e=>{checklistState.discipline=e.target.value;clRefresh();};
+  document.getElementById('clSystem').onchange=e=>{checklistState.system=e.target.value;clRefresh();};
+  document.getElementById('clSupplier').onchange=e=>{checklistState.supplier=e.target.value;clRefresh();};
+  document.getElementById('clTrendMode').onchange=e=>{checklistState.trendMode=e.target.value;clRenderTrend();};
+  document.getElementById('clTrendLevel').onchange=e=>{checklistState.trendLevel=e.target.value;clRenderTrend();};
+  document.getElementById('clPrev').onclick=()=>{if(checklistState.page>0){checklistState.page--;clRenderTable();}};
+  document.getElementById('clNext').onclick=()=>{checklistState.page++;clRenderTable();};
+  document.getElementById('clReset').onclick=()=>{
+    checklistState.q='';checklistState.tranche='ALL';checklistState.discipline='ALL';checklistState.system='ALL';checklistState.supplier='ALL';
+    q.value='';['clTranche','clDiscipline','clSystem','clSupplier'].forEach(id=>document.getElementById(id).value='ALL');clRefresh();
+  };
+}
+
+
+/* ============================================================== 11. WIRE-UP */
+function showPage(page){
+  document.querySelectorAll('.page-nav button[data-page]').forEach(b=>{
+    b.classList.toggle('on', b.dataset.page===page);
+  });
+  document.querySelectorAll('.page').forEach(p=>{
+    p.classList.toggle('on', p.id==='page-'+page);
+  });
+  requestAnimationFrame(()=>{
+    Object.values(charts).forEach(c=>{ try{ c.resize(); }catch(e){} });
+  });
+}
+
+function wire(){
+  chartDefaults();
+  document.querySelectorAll('.page-nav button[data-page]').forEach(b=>{
+    b.addEventListener('click', e=>{
+      e.stopPropagation();
+      showPage(b.dataset.page);
+    });
+  });
+  const asOfEl = document.getElementById('asOf');
+  asOfEl.valueAsDate = state.asOf;
+  asOfEl.onchange = ()=>{
+    const d = asOfEl.valueAsDate; if(!d) return;
+    state.asOf = startOfDay(new Date(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
+    classify(state.asOf); refresh(true);
+  };
+  document.getElementById('q').oninput = debounce(e=>{ state.search=e.target.value; refresh(); },400);
+  document.getElementById('dFrom').onchange = e=>{ const d=e.target.valueAsDate; state.dFrom = d?startOfDay(new Date(d.getUTCFullYear(),d.getUTCMonth(),d.getUTCDate())):null; refresh(); };
+  document.getElementById('dTo').onchange   = e=>{ const d=e.target.valueAsDate; state.dTo   = d?startOfDay(new Date(d.getUTCFullYear(),d.getUTCMonth(),d.getUTCDate())):null; refresh(); };
+  document.getElementById('resetBtn').onclick = resetAll;
+  document.getElementById('exportBtn').onclick = exportCSV;
+  document.getElementById('printBtn').onclick = ()=>window.print();
+  document.getElementById('themeBtn').onclick = ()=>{
+    const r=document.documentElement;
+    r.dataset.theme = r.dataset.theme==='dark'?'light':'dark';
+    chartDefaults(); refresh(true);
+  };
+  document.getElementById('cbBtn').onclick = ()=>{
+    const r=document.documentElement;
+    r.dataset.palette = r.dataset.palette==='cb'?'normal':'cb';
+    refresh(true);
+  };
+  document.getElementById('scTranche').onchange = e=>{ state.scTranche=e.target.value; renderSCurve(); };
+  document.getElementById('scMode').onchange    = e=>{ state.scMode=e.target.value; renderSCurve(); };
+  document.getElementById('matrixDim').onchange = e=>{ state.matrixDim=e.target.value; state.matrixOpen.clear(); renderMatrix(); };
+  document.querySelectorAll('.tabs button').forEach(b=>b.onclick=()=>{
+    document.querySelectorAll('.tabs button').forEach(x=>x.classList.remove('on'));
+    b.classList.add('on'); state.tab=b.dataset.tab; renderTabTable();
+  });
+  document.getElementById('prevPage').onclick = ()=>{ if(state.page>0){state.page--; renderDetail();} };
+  document.getElementById('nextPage').onclick = ()=>{ state.page++; renderDetail(); };
+
+  // File intake: picker + drag-and-drop
+  const drop = document.getElementById('drop'), fileIn = document.getElementById('file');
+  drop.onclick = ()=>fileIn.click();
+  fileIn.onchange = e=>handleHostedEquipmentOverride(e.target.files[0]);
+  ['dragenter','dragover'].forEach(ev=>document.addEventListener(ev,e=>{e.preventDefault();drop.classList.add('hot');}));
+  ['dragleave','drop'].forEach(ev=>document.addEventListener(ev,e=>{
+    e.preventDefault();
+    if(ev==='drop'){ drop.classList.remove('hot'); handleHostedEquipmentOverride(e.dataTransfer.files[0]); }
+    else if(e.target===document||e.relatedTarget===null) drop.classList.remove('hot');
+  }));
+  document.addEventListener('click',()=>document.querySelectorAll('.ms.open').forEach(m=>m.classList.remove('open')));
+  document.querySelectorAll('.ms-panel').forEach(p=>p.addEventListener('click',e=>e.stopPropagation()));
+  window.addEventListener('resize', debounce(()=>Object.values(charts).forEach(c=>c.resize()),200));
+}
+
+/* Boot */
+document.addEventListener('DOMContentLoaded', ()=>{
+  wire();
+  wireChecklistPage();
+  loadHostedData();
+  loadChecklistData();
+});
+</script>
+</body>
+</html>
