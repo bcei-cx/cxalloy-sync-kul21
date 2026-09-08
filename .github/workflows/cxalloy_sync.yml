@@ -7,6 +7,7 @@ on:
       - 'build_dashboard.py'
       - 'patch_checklist_multiselect.py'
       - 'build_checklist_daily_history.py'
+      - 'make_dashboard_standalone.py'
       - '.github/workflows/cxalloy_sync.yml'
   schedule:
     # Daily at 18:00 UTC = 2:00 AM Malaysia Time (MYT, UTC+8).
@@ -67,8 +68,11 @@ jobs:
       - name: Enable checklist multi-select and weekly comparison
         run: python patch_checklist_multiselect.py
 
+      - name: Make dashboard standalone
+        run: python make_dashboard_standalone.py
+
       - name: Commit updated data and dashboard back to repo
         uses: stefanzweifel/git-auto-commit-action@v5
         with:
           commit_message: "Daily CxAlloy sync + dashboard refresh"
-          file_pattern: 'index.html .nojekyll data/equipment_status.csv data/checklist_status.csv data/checklist_progress_current.csv data/checklist_progress_daily.csv data/checklist_progress_history.csv data/checklist_completion_by_equipment.csv data/checklist_progress_daily_type.csv data/checklist_progress_equipment_changes.csv'
+          file_pattern: 'index.html .nojekyll data/projected_dates.xlsx data/equipment_status.csv data/checklist_status.csv data/checklist_progress_current.csv data/checklist_progress_daily.csv data/checklist_progress_history.csv data/checklist_completion_by_equipment.csv data/checklist_progress_daily_type.csv data/checklist_progress_equipment_changes.csv'
