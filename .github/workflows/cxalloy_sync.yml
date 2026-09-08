@@ -6,6 +6,7 @@ on:
     paths:
       - 'build_dashboard.py'
       - 'patch_checklist_multiselect.py'
+      - 'build_checklist_daily_history.py'
       - '.github/workflows/cxalloy_sync.yml'
   schedule:
     # Daily at 18:00 UTC = 2:00 AM Malaysia Time (MYT, UTC+8).
@@ -57,6 +58,9 @@ jobs:
       - name: Build per-equipment checklist completion snapshot
         run: python build_equipment_checklist_snapshot.py
 
+      - name: Build compact daily checklist history
+        run: python build_checklist_daily_history.py
+
       - name: Build hosted dashboard
         run: python build_dashboard.py
 
@@ -67,4 +71,4 @@ jobs:
         uses: stefanzweifel/git-auto-commit-action@v5
         with:
           commit_message: "Daily CxAlloy sync + dashboard refresh"
-          file_pattern: 'index.html .nojekyll data/equipment_status.csv data/checklist_status.csv data/checklist_progress_current.csv data/checklist_progress_daily.csv data/checklist_progress_history.csv data/checklist_completion_by_equipment.csv'
+          file_pattern: 'index.html .nojekyll data/equipment_status.csv data/checklist_status.csv data/checklist_progress_current.csv data/checklist_progress_daily.csv data/checklist_progress_history.csv data/checklist_completion_by_equipment.csv data/checklist_progress_daily_type.csv data/checklist_progress_equipment_changes.csv'
