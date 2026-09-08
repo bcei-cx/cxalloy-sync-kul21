@@ -4,16 +4,16 @@ on:
   push:
     branches: [main]
     paths:
-      - 'build_dashboard.py'
-      - 'patch_checklist_multiselect.py'
+      - 'cxalloy_to_csv.py'
+      - 'cxalloy_checklist_to_csv.py'
+      - 'cxalloy_checklist_lines_to_csv.py'
+      - 'build_equipment_checklist_snapshot.py'
       - 'build_checklist_daily_history.py'
-      - 'make_dashboard_standalone.py'
       - '.github/workflows/cxalloy_sync.yml'
   schedule:
     # Daily at 18:00 UTC = 2:00 AM Malaysia Time (MYT, UTC+8).
     - cron: '0 18 * * *'
     # Weekly cutoff: Sunday 15:55 UTC = Sunday 11:55 PM Malaysia Time.
-    # This captures the final Monday-Sunday state before Monday starts a new week.
     - cron: '55 15 * * 0'
   workflow_dispatch: {}
 
@@ -62,17 +62,8 @@ jobs:
       - name: Build compact daily checklist history
         run: python build_checklist_daily_history.py
 
-      - name: Build hosted dashboard
-        run: python build_dashboard.py
-
-      - name: Enable checklist multi-select and weekly comparison
-        run: python patch_checklist_multiselect.py
-
-      - name: Make dashboard standalone
-        run: python make_dashboard_standalone.py
-
-      - name: Commit updated data and dashboard back to repo
+      - name: Commit updated data back to repo
         uses: stefanzweifel/git-auto-commit-action@v5
         with:
-          commit_message: "Daily CxAlloy sync + dashboard refresh"
-          file_pattern: 'index.html .nojekyll data/projected_dates.xlsx data/equipment_status.csv data/checklist_status.csv data/checklist_progress_current.csv data/checklist_progress_daily.csv data/checklist_progress_history.csv data/checklist_completion_by_equipment.csv data/checklist_progress_daily_type.csv data/checklist_progress_equipment_changes.csv'
+          commit_message: "Daily CxAlloy sync"
+          file_pattern: 'data/equipment_status.csv data/checklist_status.csv data/checklist_progress_current.csv data/checklist_progress_daily.csv data/checklist_progress_history.csv data/checklist_completion_by_equipment.csv data/checklist_progress_daily_type.csv data/checklist_progress_equipment_changes.csv'
