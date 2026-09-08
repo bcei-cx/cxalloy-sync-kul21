@@ -45,8 +45,11 @@ jobs:
           CXALLOY_PROJECT_ID: ${{ vars.CXALLOY_PROJECT_ID }}
         run: python cxalloy_checklist_lines_to_csv.py
 
+      - name: Build per-equipment checklist completion snapshot
+        run: python build_equipment_checklist_snapshot.py
+
       - name: Commit updated CSVs back to repo
         uses: stefanzweifel/git-auto-commit-action@v5
         with:
           commit_message: "Daily CxAlloy equipment + checklist sync"
-          file_pattern: 'data/equipment_status.csv data/checklist_status.csv data/checklist_progress_current.csv data/checklist_progress_daily.csv data/checklist_progress_history.csv'
+          file_pattern: 'data/equipment_status.csv data/checklist_status.csv data/checklist_progress_current.csv data/checklist_progress_daily.csv data/checklist_progress_history.csv data/checklist_completion_by_equipment.csv'
