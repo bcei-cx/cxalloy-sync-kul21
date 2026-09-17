@@ -1,0 +1,33 @@
+name: Apply Dashboard UI Patch
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'patch_completion_table_sort_filter.py'
+      - '.github/workflows/apply_dashboard_ui_patch.yml'
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Apply Completion by equipment sort/filter patch
+        run: python patch_completion_table_sort_filter.py
+
+      - name: Commit dashboard update
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "Add Completion by equipment sort and filters"
+          file_pattern: 'index.html'
