@@ -2181,6 +2181,25 @@ function clTrendPoints(){
   if(checklistState.trendMode==='weekly'){const w=new Map();pts.forEach(p=>w.set(p.week,p));pts=[...w.values()].sort((a,b)=>a.date.localeCompare(b.date));}return pts;
 }
 function clRenderTrend(){const pts=clTrendPoints();upsert('checklistTrend',{type:'line',data:{labels:pts.map(p=>p.date),datasets:[{label:checklistState.trendLevel+' completion %',data:pts.map(p=>+p.p.toFixed(2)),borderColor:cssVar('--accent'),backgroundColor:'rgba(45,127,249,.10)',borderWidth:2.5,pointRadius:3,tension:.25,fill:true}]},options:{plugins:{legend:{display:false},tooltip:{callbacks:{label:c=>c.parsed.y.toFixed(2)+'%'}}},scales:{x:{grid:{display:false}},y:{beginAtZero:true,max:100,grid:{color:gridColor()},ticks:{callback:v=>v+'%'},title:{display:true,text:'Checklist completion'}}}}});}
+
+function clWeekInfo(){
+  const weeks=uniqSorted((checklistState.history||[]).map(r=>txtValue(r.week_start)).filter(Boolean));
+  return {current:weeks.length?weeks[weeks.length-1]:'',previous:weeks.length>1?weeks[weeks.length-2]:''};
+}
+function clEqKey(r){
+  return txtValue(r.project_id)+'|'+txtValue(r.asset_key||r.asset_name);
+}
+function clLastWeekStats(currentRows,level){
+  const wk=clWeekInfo().previous;if(!wk)return null;
+  const keys=new Set(currentRows.map(clEqKey));
+  let total=0,completed=0;
+  (checklistState.history||[]).forEach(r=>{
+    if(txtValue(r.week_start)!==wk||txtValue(r.commissioning_level)!==level||!keys.has(clEqKey(r)))return;
+    total+=clNum(r.total_lines);completed+=clNum(r.completed_lines);
+  });
+  return total?{total,completed,p:completed/total*100}:null;
+}
+
 function clEquipmentWeekPct(r,level){
   const wk=clWeekInfo().previous;if(!wk)return null;
   const key=clEqKey(r);
