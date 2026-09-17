@@ -10,6 +10,7 @@ on:
       - 'build_equipment_checklist_snapshot.py'
       - 'build_checklist_daily_history.py'
       - 'restore_checklist_week_helpers.py'
+      - 'patch_checklist_table_sort_filter.py'
       - '.github/workflows/cxalloy_sync.yml'
   schedule:
     # Daily at 18:00 UTC = 2:00 AM Malaysia Time (MYT, UTC+8).
@@ -66,8 +67,11 @@ jobs:
       - name: Restore checklist weekly helpers
         run: python restore_checklist_week_helpers.py
 
+      - name: Add checklist table sorting and filtering
+        run: python patch_checklist_table_sort_filter.py
+
       - name: Commit updated data and dashboard back to repo
         uses: stefanzweifel/git-auto-commit-action@v5
         with:
-          commit_message: "Daily CxAlloy sync + checklist helper repair"
+          commit_message: "Daily CxAlloy sync + checklist table controls"
           file_pattern: 'index.html data/equipment_status.csv data/checklist_status.csv data/checklist_progress_current.csv data/checklist_progress_daily.csv data/checklist_progress_history.csv data/checklist_completion_by_equipment.csv data/checklist_progress_daily_type.csv data/checklist_progress_equipment_changes.csv'
