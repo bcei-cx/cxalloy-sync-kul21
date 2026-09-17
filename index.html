@@ -2250,6 +2250,15 @@ function clShowEquipmentHistory(r){
   modal.classList.add('open');document.body.style.overflow='hidden';
 }
 
+function clRefresh(){
+  clApplyFilters();
+  clRenderKPIs();
+  clRenderHeatmap();
+  clRenderRankChart();
+  clRenderTrend();
+  clRenderTable();
+}
+
 
 async function loadChecklistData(){
   try{
