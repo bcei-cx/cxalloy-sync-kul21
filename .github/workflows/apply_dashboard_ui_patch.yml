@@ -4,7 +4,7 @@ on:
   push:
     branches: [main]
     paths:
-      - 'patch_completion_table_sort_filter.py'
+      - 'patch_all_dashboard_tables.py'
       - '.github/workflows/apply_dashboard_ui_patch.yml'
   workflow_dispatch: {}
 
@@ -23,11 +23,11 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Apply Completion by equipment sort/filter patch
-        run: python patch_completion_table_sort_filter.py
+      - name: Apply universal dashboard table tools
+        run: python patch_all_dashboard_tables.py
 
       - name: Commit dashboard update
         uses: stefanzweifel/git-auto-commit-action@v5
         with:
-          commit_message: "Add Completion by equipment sort and filters"
+          commit_message: "Add dashboard-wide table search filters and sorting"
           file_pattern: 'index.html'
