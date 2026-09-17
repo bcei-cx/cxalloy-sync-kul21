@@ -100,3 +100,4 @@ else:
 
 path.write_text(html, encoding='utf-8')
 print('Universal table search/filter/sort layer applied')
+# trigger: 2026-09-17
