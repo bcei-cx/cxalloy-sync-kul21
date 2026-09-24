@@ -2161,18 +2161,25 @@ function clRenderKPIs(){
 function clRenderHeatmap(){
   const rows=checklistState.baseFiltered;
   const types=clUniqueFromRows(rows,'equipment_type');
-  let h='<thead><tr><th>Equipment Type</th><th class="num">Equipment</th>'+LEVELS.map(l=>'<th class="num"><span class="tagdot" style="background:var('+l.varc+')"></span>'+l.k+'</th>').join('')+'</tr></thead><tbody>';
+  const wk=clWeekInfo();
+  let h='<thead><tr><th>Equipment Type</th><th class="num">Equipment</th>'+LEVELS.map(l=>'<th class="num"><span class="tagdot" style="background:var('+l.varc+')"></span>'+l.k+'<div style="font-size:9px;font-weight:400;text-transform:none">Current · last week</div></th>').join('')+'</tr></thead><tbody>';
   if(!types.length)h+='<tr><td colspan="7" class="empty">No equipment types match the current filters.</td></tr>';
   types.forEach(t=>{
     const rs=rows.filter(r=>txtValue(r.equipment_type)===t);
     h+='<tr><td><b>'+esc(t)+'</b></td><td class="num">'+fmtInt(rs.length)+'</td>';
     LEVELS.forEach(l=>{
       const x=clLevelStats(rs,l.k),p=x.total?+x.p.toFixed(1):null;
-      h+='<td class="num" style="'+clHeatStyle(p)+';font-weight:700">'+(p===null?'—':p.toFixed(1)+'%')+'</td>';
+      const prev=clLastWeekStats(rs,l.k);
+      const prior=prev?+prev.p.toFixed(1):null;
+      const delta=(p!==null&&prior!==null)?+(p-prior).toFixed(1):null;
+      const deltaText=delta===null?'':(' · <span class="cl-progress-delta '+(delta>0?'up':delta<0?'down':'flat')+'">'+(delta>0?'▲ +':delta<0?'▼ ':'— ')+delta.toFixed(1)+'pp</span>');
+      h+='<td class="num" style="'+clHeatStyle(p)+';font-weight:700"><div>'+(p===null?'—':p.toFixed(1)+'%')+'</div><div class="cl-progress-prior">Last week '+(prior===null?'—':prior.toFixed(1)+'%')+deltaText+'</div></td>';
     });
     h+='</tr>';
   });
   document.getElementById('clHeatmap').innerHTML=h+'</tbody>';
+  const sub=document.querySelector('#clHeatmap')?.closest('.card')?.querySelector('.card-head .sub');
+  if(sub)sub.textContent='Weighted completion by equipment type and Cx level · current vs last completed week'+(wk.previous?' ('+wk.previous+')':'');
 }
 function clRenderRankChart(){
   const level=checklistState.level==='ALL'?'Overall':checklistState.level;
