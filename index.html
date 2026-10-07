@@ -258,6 +258,8 @@ details.dq summary{cursor:pointer;color:var(--muted);font-size:11.5px}
     <button type="button" data-page="registers">5. Look-ahead &amp; Overdue</button>
     <button type="button" data-page="equipment">6. Equipment Register</button>
     <button type="button" data-page="checklists">7. Checklist Completion</button>
+    <button type="button" data-page="equipment-status">8. Equipment Status</button>
+    <button type="button" data-page="issues">9. Issue Summary</button>
   </nav>
 
   <!-- PAGE 1 · OVERVIEW & PROGRESS -->
@@ -489,6 +491,38 @@ details.dq summary{cursor:pointer;color:var(--muted);font-size:11.5px}
 
 </div>
 
+  </section>
+
+  <!-- PAGE 8 · EQUIPMENT STATUS -->
+  <section class="page" id="page-equipment-status">
+    <div class="sect-title">Equipment status</div>
+    <div class="kpis" id="eqStatusKpis"></div>
+    <div class="card c12">
+      <div class="card-head">
+        <div><h3>Equipment status register</h3><div class="sub" id="eqStatusMeta">Equipment name, tranche and current status</div></div>
+      </div>
+      <div class="tbl-scroll" style="max-height:720px"><table id="eqStatusTbl"></table></div>
+    </div>
+  </section>
+
+  <!-- PAGE 9 · ISSUE SUMMARY -->
+  <section class="page" id="page-issues">
+    <div class="sect-title">Issue summary</div>
+    <div class="kpis" id="issueKpis"></div>
+    <div class="grid">
+      <div class="card c6">
+        <div class="card-head"><div><h3>Issues by status</h3><div class="sub">Current CxAlloy issue log</div></div></div>
+        <div class="chart-box sm"><canvas id="issueStatusChart"></canvas></div>
+      </div>
+      <div class="card c6">
+        <div class="card-head"><div><h3>Issues by priority</h3><div class="sub">Current issue distribution</div></div></div>
+        <div class="chart-box sm"><canvas id="issuePriorityChart"></canvas></div>
+      </div>
+      <div class="card c12">
+        <div class="card-head"><div><h3>Issue register</h3><div class="sub" id="issueMeta">Search, filter and sort the current issue log</div></div></div>
+        <div class="tbl-scroll" style="max-height:720px"><table id="issueTbl"></table></div>
+      </div>
+    </div>
   </section>
 
 </div>
@@ -2398,7 +2432,7 @@ function wireChecklistPage(){
 
 
 /* UNIVERSAL DASHBOARD TABLE TOOLS V1 */
-const dashTableIds=['trancheTbl','matrixTbl','vendorTbl','aheadTbl','detailTbl','clHeatmap'];
+const dashTableIds=['trancheTbl','matrixTbl','vendorTbl','aheadTbl','detailTbl','clHeatmap','eqStatusTbl','issueTbl'];
 const dashTableState={};
 function dashState(id){return dashTableState[id]||(dashTableState[id]={q:'',filters:[],sort:null,dir:1});}
 function dashCellText(cell){return (cell?.innerText||cell?.textContent||'').replace(/\s+/g,' ').trim();}
@@ -2463,6 +2497,72 @@ function dashEnhanceAll(){dashTableIds.forEach(dashEnhanceTable);}
 const dashObserver=new MutationObserver(()=>{clearTimeout(dashEnhanceTimer);dashEnhanceTimer=setTimeout(dashEnhanceAll,30);});
 document.addEventListener('DOMContentLoaded',()=>{dashEnhanceAll();dashObserver.observe(document.body,{subtree:true,childList:true});});
 
+
+/* ============================================================== 10B. EQUIPMENT STATUS + ISSUES */
+const extraPageState={equipment:[],issues:[]};
+
+function csvParseText(t){return new Promise((resolve,reject)=>Papa.parse(t,{header:true,skipEmptyLines:'greedy',complete:r=>resolve(r.data),error:reject}));}
+function countBy(rows,key){
+  const m=new Map(); rows.forEach(r=>{const v=txtValue(r[key])||'Blank';m.set(v,(m.get(v)||0)+1);});
+  return [...m.entries()].sort((a,b)=>b[1]-a[1]||a[0].localeCompare(b[0]));
+}
+function statusIsClosed(r){
+  const s=txtValue(r.status).toLowerCase();
+  return !!txtValue(r.date_closed)||['closed','complete','completed','resolved'].some(x=>s===x||s.includes(x));
+}
+function issueIsOverdue(r){
+  if(statusIsClosed(r))return false;
+  const d=parseDate(r.due_date);return !!d&&d<startOfDay(new Date());
+}
+function renderEquipmentStatusPage(){
+  const rows=extraPageState.equipment;
+  const statuses=countBy(rows,'status');
+  const withStatus=rows.filter(r=>txtValue(r.status)).length;
+  document.getElementById('eqStatusKpis').innerHTML=
+    '<div class="kpi" style="cursor:default"><div class="k-label">Total equipment</div><div class="k-val">'+fmtInt(rows.length)+'</div></div>'+
+    '<div class="kpi" style="cursor:default"><div class="k-label">With status</div><div class="k-val">'+fmtInt(withStatus)+'</div><div class="k-sub">'+(rows.length?(withStatus/rows.length*100).toFixed(1):'0.0')+'%</div></div>'+
+    '<div class="kpi" style="cursor:default"><div class="k-label">Status categories</div><div class="k-val">'+fmtInt(statuses.length)+'</div></div>';
+  let h='<thead><tr><th>Equipment Name / ELI</th><th>Equipment Type</th><th>Tranche</th><th>Status</th><th>System</th><th>Area</th><th>Equipment Supplier</th></tr></thead><tbody>';
+  if(!rows.length)h+='<tr><td colspan="7" class="empty">No equipment data available.</td></tr>';
+  rows.forEach(r=>{h+='<tr><td>'+esc(r.name)+'</td><td>'+esc(r.type)+'</td><td>'+esc(r.tranche)+'</td><td>'+esc(r.status)+'</td><td>'+esc(r.systems)+'</td><td>'+esc(r.space)+'</td><td>'+esc(r.equipment_supplier)+'</td></tr>';});
+  document.getElementById('eqStatusTbl').innerHTML=h+'</tbody>';
+  document.getElementById('eqStatusMeta').textContent=fmtInt(rows.length)+' equipment · current status from CxAlloy';
+  setTimeout(()=>dashEnhanceTable('eqStatusTbl'),0);
+}
+function renderIssueSummaryPage(){
+  const rows=extraPageState.issues;
+  const closed=rows.filter(statusIsClosed).length,active=rows.length-closed,overdue=rows.filter(issueIsOverdue).length;
+  const statusCounts=countBy(rows,'status'),priorityCounts=countBy(rows,'priority');
+  document.getElementById('issueKpis').innerHTML=
+    '<div class="kpi" style="cursor:default"><div class="k-label">Total issues</div><div class="k-val">'+fmtInt(rows.length)+'</div></div>'+
+    '<div class="kpi" style="cursor:default"><div class="k-label">Active</div><div class="k-val">'+fmtInt(active)+'</div></div>'+
+    '<div class="kpi" style="cursor:default"><div class="k-label">Closed</div><div class="k-val">'+fmtInt(closed)+'</div></div>'+
+    '<div class="kpi" style="cursor:default"><div class="k-label">Overdue active</div><div class="k-val">'+fmtInt(overdue)+'</div></div>';
+  upsert('issueStatusChart',{type:'bar',data:{labels:statusCounts.map(x=>x[0]),datasets:[{label:'Issues',data:statusCounts.map(x=>x[1]),backgroundColor:cssVar('--accent')}]},options:{plugins:{legend:{display:false}},scales:{x:{grid:{display:false}},y:{beginAtZero:true,grid:{color:gridColor()}}}}});
+  upsert('issuePriorityChart',{type:'bar',data:{labels:priorityCounts.map(x=>x[0]),datasets:[{label:'Issues',data:priorityCounts.map(x=>x[1]),backgroundColor:cssVar('--st-late')}]},options:{plugins:{legend:{display:false}},scales:{x:{grid:{display:false}},y:{beginAtZero:true,grid:{color:gridColor()}}}}});
+  let h='<thead><tr><th>Issue</th><th>Status</th><th>Priority</th><th>Discipline</th><th>Issue Type</th><th>Equipment / Source</th><th>Assigned To</th><th>Due Date</th><th>Created</th></tr></thead><tbody>';
+  if(!rows.length)h+='<tr><td colspan="9" class="empty">No issue data available.</td></tr>';
+  rows.forEach(r=>{const src=txtValue(r.asset_name)||txtValue(r.source_name);h+='<tr><td>'+esc(txtValue(r.name)||txtValue(r.issue_id))+'</td><td>'+esc(r.status)+'</td><td>'+esc(r.priority)+'</td><td>'+esc(r.discipline)+'</td><td>'+esc(r.issuetype)+'</td><td>'+esc(src)+'</td><td>'+esc(r.assigned_name)+'</td><td>'+esc(r.due_date)+'</td><td>'+esc(r.date_created)+'</td></tr>';});
+  document.getElementById('issueTbl').innerHTML=h+'</tbody>';
+  document.getElementById('issueMeta').textContent=fmtInt(rows.length)+' issues · '+fmtInt(active)+' active · '+fmtInt(overdue)+' overdue';
+  setTimeout(()=>dashEnhanceTable('issueTbl'),0);
+}
+async function loadExtraPages(){
+  try{
+    const [e,i]=await Promise.all([
+      fetch('./data/equipment_status.csv',{cache:'no-store'}),
+      fetch('./data/issues.csv',{cache:'no-store'})
+    ]);
+    if(e.ok)extraPageState.equipment=await csvParseText(await e.text());
+    if(i.ok)extraPageState.issues=await csvParseText(await i.text());
+    renderEquipmentStatusPage();
+    renderIssueSummaryPage();
+  }catch(err){
+    console.error('Extra page data failed to load',err);
+    const em=document.getElementById('eqStatusTbl');if(em)em.innerHTML='<tbody><tr><td class="empty">Equipment status data failed to load.</td></tr></tbody>';
+    const im=document.getElementById('issueTbl');if(im)im.innerHTML='<tbody><tr><td class="empty">Issue data failed to load.</td></tr></tbody>';
+  }
+}
 
 /* ============================================================== 11. WIRE-UP */
 function showPage(page){
@@ -2539,6 +2639,7 @@ document.addEventListener('DOMContentLoaded', ()=>{
   wireChecklistPage();
   loadHostedData();
   loadChecklistData();
+  loadExtraPages();
 });
 </script>
 </body>
