@@ -516,7 +516,11 @@ details.dq summary{cursor:pointer;color:var(--muted);font-size:11.5px}
           <h2 style="margin:0;font-size:18px">Equipment &amp; Issue Status</h2>
           <div class="sub" id="externalDataAsOf">External status summary</div>
         </div>
-        <button type="button" class="primary no-print" id="externalPrintBtn">Print this page / PDF</button>
+        <div class="toolbar no-print">
+          <button type="button" id="externalExcelBtn">Export Excel</button>
+          <button type="button" id="externalCsvBtn">Export CSV</button>
+          <button type="button" class="primary" id="externalPrintBtn">Print this page / PDF</button>
+        </div>
       </div>
     </div>
 
@@ -2565,6 +2569,71 @@ function issueCriticalities(){
   const rank=v=>{const x=v.toLowerCase();if(x==='critical')return 0;if(x==='non-critical'||x==='non critical')return 1;if(x==='unspecified')return 99;return 10;};
   return vals.sort((a,b)=>rank(a)-rank(b)||a.localeCompare(b));
 }
+function externalEquipmentSummaryAOA(){
+  const rows=extraPageState.equipment,tranches=externalTranches(),levels=['L1','L2','L3','L4','L5'];
+  const out=[['Tranche','Equipment Count','L1 Tag Count','L2 Tag Count','L3 Tag Count','L4 Tag Count','L5 Tag Count']];
+  const add=(label,rs)=>out.push([label,rs.length,...levels.map(l=>rs.filter(r=>tagAchieved(r,l)).length)]);
+  tranches.forEach(t=>add(t,rows.filter(r=>txtValue(r.tranche)===t)));
+  add('Total / All Tranches',rows);
+  return out;
+}
+function externalEquipmentRegisterAOA(){
+  const rows=extraPageState.equipment.slice().sort((a,b)=>trancheSort(a.tranche,b.tranche)||txtValue(a.name).localeCompare(txtValue(b.name),undefined,{numeric:true}));
+  return [['Equipment Name / ELI','Tranche','Current Status'],...rows.map(r=>[txtValue(r.name),txtValue(r.tranche),txtValue(r.status)])];
+}
+function externalIssueSummaryAOA(){
+  const rows=extraPageState.issues,eqMap=equipmentTrancheMap(),projMap=projectTrancheMap();
+  const priorities=issueCriticalities(),tranches=externalTranches();
+  const enriched=rows.map(r=>({r,tranche:issueTranche(r,eqMap,projMap),closed:statusIsClosed(r),priority:txtValue(r.priority)||'Unspecified'}));
+  const unmatched=enriched.some(x=>x.tranche==='Unassigned');
+  const labels=unmatched?[...tranches,'Unassigned']:tranches.slice();
+  const out=[['Tranche','Total Issues',...priorities.map(p=>'Open · '+p),...priorities.map(p=>'Closed · '+p)]];
+  const add=(label,items)=>out.push([label,items.length,...priorities.map(p=>items.filter(x=>!x.closed&&x.priority===p).length),...priorities.map(p=>items.filter(x=>x.closed&&x.priority===p).length)]);
+  labels.forEach(t=>add(t,enriched.filter(x=>x.tranche===t)));
+  add('Total / All Tranches',enriched);
+  return out;
+}
+function externalFileDate(){
+  const d=new Date(),p=n=>String(n).padStart(2,'0');
+  return d.getFullYear()+'-'+p(d.getMonth()+1)+'-'+p(d.getDate());
+}
+function exportExternalExcel(){
+  const wb=XLSX.utils.book_new();
+  const sheets=[
+    ['Equipment Summary',externalEquipmentSummaryAOA()],
+    ['Equipment Register',externalEquipmentRegisterAOA()],
+    ['Issue Summary',externalIssueSummaryAOA()]
+  ];
+  sheets.forEach(([name,data])=>{
+    const ws=XLSX.utils.aoa_to_sheet(data);
+    const widths=data.reduce((acc,row)=>row.map((v,i)=>Math.max(acc[i]||8,Math.min(42,String(v??'').length+2))),[]);
+    ws['!cols']=widths.map(w=>({wch:w}));
+    if(ws['!ref'])ws['!autofilter']={ref:ws['!ref']};
+    XLSX.utils.book_append_sheet(wb,ws,name);
+  });
+  XLSX.writeFile(wb,'KUL21_Equipment_Issue_Status_External_'+externalFileDate()+'.xlsx');
+}
+function externalCsvEscape(v){
+  const s=String(v??'');
+  return /[",\n\r]/.test(s)?'"'+s.replace(/"/g,'""')+'"':s;
+}
+function exportExternalCsv(){
+  const sections=[
+    ['EQUIPMENT STATUS SUMMARY',externalEquipmentSummaryAOA()],
+    ['EQUIPMENT STATUS REGISTER',externalEquipmentRegisterAOA()],
+    ['ISSUE SUMMARY',externalIssueSummaryAOA()]
+  ];
+  const lines=[];
+  sections.forEach((sec,idx)=>{
+    if(idx)lines.push('');
+    lines.push(externalCsvEscape(sec[0]));
+    sec[1].forEach(row=>lines.push(row.map(externalCsvEscape).join(',')));
+  });
+  const blob=new Blob(['\ufeff'+lines.join('\r\n')],{type:'text/csv;charset=utf-8;'});
+  const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='KUL21_Equipment_Issue_Status_External_'+externalFileDate()+'.csv';
+  document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(a.href),1000);
+}
+
 function renderExternalEquipmentSummary(){
   const rows=extraPageState.equipment,tranches=externalTranches(),levels=['L1','L2','L3','L4','L5'];
   let h='<thead><tr><th>Tranche</th><th class="num">Equipment</th>'+levels.map(l=>'<th class="num">'+l+' Tag</th>').join('')+'</tr></thead><tbody>';
@@ -2667,6 +2736,8 @@ function wire(){
   document.getElementById('exportBtn').onclick = exportCSV;
   document.getElementById('printBtn').onclick = ()=>document.getElementById('page-external-status').classList.contains('on')?printExternalPage():window.print();
   document.getElementById('externalPrintBtn').onclick = printExternalPage;
+  document.getElementById('externalExcelBtn').onclick = exportExternalExcel;
+  document.getElementById('externalCsvBtn').onclick = exportExternalCsv;
   window.addEventListener('afterprint',()=>document.body.classList.remove('print-external'));
   document.getElementById('themeBtn').onclick = ()=>{
     const r=document.documentElement;
