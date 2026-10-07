@@ -53,6 +53,22 @@ body{
   .page-title{page-break-before:always}
   .page:first-child .page-title{page-break-before:auto}
 }
+@media print{
+  body.print-external header.app,
+  body.print-external .page-nav,
+  body.print-external .page{display:none !important}
+  body.print-external #page-external-status{display:block !important}
+  body.print-external .no-print,
+  body.print-external .dash-table-tools,
+  body.print-external .dash-col-filter{display:none !important}
+  body.print-external .wrap{max-width:none;padding:0}
+  body.print-external .card{box-shadow:none;border-color:#bbb;break-inside:avoid}
+  body.print-external .external-register-scroll,
+  body.print-external .external-summary-scroll{max-height:none !important;overflow:visible !important}
+  body.print-external table{font-size:10px}
+  body.print-external th,body.print-external td{padding:4px 6px}
+  body.print-external .sect-title{margin-top:14px}
+}
 .grid{display:grid;grid-template-columns:repeat(12,1fr);gap:16px}
 .c4{grid-column:span 4}.c6{grid-column:span 6}.c8{grid-column:span 8}.c12{grid-column:span 12}
 @media(max-width:1180px){.c4,.c6,.c8{grid-column:span 12}}
@@ -258,8 +274,7 @@ details.dq summary{cursor:pointer;color:var(--muted);font-size:11.5px}
     <button type="button" data-page="registers">5. Look-ahead &amp; Overdue</button>
     <button type="button" data-page="equipment">6. Equipment Register</button>
     <button type="button" data-page="checklists">7. Checklist Completion</button>
-    <button type="button" data-page="equipment-status">8. Equipment Status</button>
-    <button type="button" data-page="issues">9. Issue Summary</button>
+    <button type="button" data-page="external-status">8. Equipment &amp; Issue Status (External)</button>
   </nav>
 
   <!-- PAGE 1 · OVERVIEW & PROGRESS -->
@@ -493,35 +508,31 @@ details.dq summary{cursor:pointer;color:var(--muted);font-size:11.5px}
 
   </section>
 
-  <!-- PAGE 8 · EQUIPMENT STATUS -->
-  <section class="page" id="page-equipment-status">
-    <div class="sect-title">Equipment status</div>
-    <div class="kpis" id="eqStatusKpis"></div>
-    <div class="card c12">
+  <!-- PAGE 8 · EQUIPMENT & ISSUE STATUS (EXTERNAL) -->
+  <section class="page" id="page-external-status">
+    <div class="card c12 external-cover">
       <div class="card-head">
-        <div><h3>Equipment status register</h3><div class="sub" id="eqStatusMeta">Equipment name, tranche and current status</div></div>
+        <div>
+          <h2 style="margin:0;font-size:18px">Equipment &amp; Issue Status</h2>
+          <div class="sub" id="externalDataAsOf">External status summary</div>
+        </div>
+        <button type="button" class="primary no-print" id="externalPrintBtn">Print this page / PDF</button>
       </div>
-      <div class="tbl-scroll" style="max-height:720px"><table id="eqStatusTbl"></table></div>
     </div>
-  </section>
 
-  <!-- PAGE 9 · ISSUE SUMMARY -->
-  <section class="page" id="page-issues">
+    <div class="sect-title">Equipment status summary</div>
+    <div class="card c12">
+      <div class="tbl-scroll external-summary-scroll"><table id="externalEqSummaryTbl"></table></div>
+    </div>
+
+    <div class="sect-title">Equipment status register</div>
+    <div class="card c12">
+      <div class="tbl-scroll external-register-scroll"><table id="externalEquipmentTbl"></table></div>
+    </div>
+
     <div class="sect-title">Issue summary</div>
-    <div class="kpis" id="issueKpis"></div>
-    <div class="grid">
-      <div class="card c6">
-        <div class="card-head"><div><h3>Issues by status</h3><div class="sub">Current CxAlloy issue log</div></div></div>
-        <div class="chart-box sm"><canvas id="issueStatusChart"></canvas></div>
-      </div>
-      <div class="card c6">
-        <div class="card-head"><div><h3>Issues by priority</h3><div class="sub">Current issue distribution</div></div></div>
-        <div class="chart-box sm"><canvas id="issuePriorityChart"></canvas></div>
-      </div>
-      <div class="card c12">
-        <div class="card-head"><div><h3>Issue register</h3><div class="sub" id="issueMeta">Search, filter and sort the current issue log</div></div></div>
-        <div class="tbl-scroll" style="max-height:720px"><table id="issueTbl"></table></div>
-      </div>
+    <div class="card c12">
+      <div class="tbl-scroll external-summary-scroll"><table id="externalIssueSummaryTbl"></table></div>
     </div>
   </section>
 
@@ -2432,7 +2443,7 @@ function wireChecklistPage(){
 
 
 /* UNIVERSAL DASHBOARD TABLE TOOLS V1 */
-const dashTableIds=['trancheTbl','matrixTbl','vendorTbl','aheadTbl','detailTbl','clHeatmap','eqStatusTbl','issueTbl'];
+const dashTableIds=['trancheTbl','matrixTbl','vendorTbl','aheadTbl','detailTbl','clHeatmap','externalEqSummaryTbl','externalEquipmentTbl','externalIssueSummaryTbl'];
 const dashTableState={};
 function dashState(id){return dashTableState[id]||(dashTableState[id]={q:'',filters:[],sort:null,dir:1});}
 function dashCellText(cell){return (cell?.innerText||cell?.textContent||'').replace(/\s+/g,' ').trim();}
@@ -2498,54 +2509,109 @@ const dashObserver=new MutationObserver(()=>{clearTimeout(dashEnhanceTimer);dash
 document.addEventListener('DOMContentLoaded',()=>{dashEnhanceAll();dashObserver.observe(document.body,{subtree:true,childList:true});});
 
 
-/* ============================================================== 10B. EQUIPMENT STATUS + ISSUES */
+/* ============================================================== 10B. EXTERNAL EQUIPMENT + ISSUE STATUS */
 const extraPageState={equipment:[],issues:[]};
 
 function csvParseText(t){return new Promise((resolve,reject)=>Papa.parse(t,{header:true,skipEmptyLines:'greedy',complete:r=>resolve(r.data),error:reject}));}
-function countBy(rows,key){
-  const m=new Map(); rows.forEach(r=>{const v=txtValue(r[key])||'Blank';m.set(v,(m.get(v)||0)+1);});
-  return [...m.entries()].sort((a,b)=>b[1]-a[1]||a[0].localeCompare(b[0]));
-}
 function statusIsClosed(r){
   const s=txtValue(r.status).toLowerCase();
   return !!txtValue(r.date_closed)||['closed','complete','completed','resolved'].some(x=>s===x||s.includes(x));
 }
-function issueIsOverdue(r){
-  if(statusIsClosed(r))return false;
-  const d=parseDate(r.due_date);return !!d&&d<startOfDay(new Date());
+function trancheSort(a,b){
+  const ax=txtValue(a),bx=txtValue(b);
+  const an=Number((ax.match(/\d+/)||[])[0]),bn=Number((bx.match(/\d+/)||[])[0]);
+  if(Number.isFinite(an)&&Number.isFinite(bn)&&an!==bn)return an-bn;
+  return ax.localeCompare(bx,undefined,{numeric:true,sensitivity:'base'});
 }
-function renderEquipmentStatusPage(){
-  const rows=extraPageState.equipment;
-  const statuses=countBy(rows,'status');
-  const withStatus=rows.filter(r=>txtValue(r.status)).length;
-  document.getElementById('eqStatusKpis').innerHTML=
-    '<div class="kpi" style="cursor:default"><div class="k-label">Total equipment</div><div class="k-val">'+fmtInt(rows.length)+'</div></div>'+
-    '<div class="kpi" style="cursor:default"><div class="k-label">With status</div><div class="k-val">'+fmtInt(withStatus)+'</div><div class="k-sub">'+(rows.length?(withStatus/rows.length*100).toFixed(1):'0.0')+'%</div></div>'+
-    '<div class="kpi" style="cursor:default"><div class="k-label">Status categories</div><div class="k-val">'+fmtInt(statuses.length)+'</div></div>';
-  let h='<thead><tr><th>Equipment Name / ELI</th><th>Equipment Type</th><th>Tranche</th><th>Status</th><th>System</th><th>Area</th><th>Equipment Supplier</th></tr></thead><tbody>';
-  if(!rows.length)h+='<tr><td colspan="7" class="empty">No equipment data available.</td></tr>';
-  rows.forEach(r=>{h+='<tr><td>'+esc(r.name)+'</td><td>'+esc(r.type)+'</td><td>'+esc(r.tranche)+'</td><td>'+esc(r.status)+'</td><td>'+esc(r.systems)+'</td><td>'+esc(r.space)+'</td><td>'+esc(r.equipment_supplier)+'</td></tr>';});
-  document.getElementById('eqStatusTbl').innerHTML=h+'</tbody>';
-  document.getElementById('eqStatusMeta').textContent=fmtInt(rows.length)+' equipment · current status from CxAlloy';
-  setTimeout(()=>dashEnhanceTable('eqStatusTbl'),0);
+function externalTranches(){
+  return [...new Set(extraPageState.equipment.map(r=>txtValue(r.tranche)).filter(Boolean))].sort(trancheSort);
 }
-function renderIssueSummaryPage(){
-  const rows=extraPageState.issues;
-  const closed=rows.filter(statusIsClosed).length,active=rows.length-closed,overdue=rows.filter(issueIsOverdue).length;
-  const statusCounts=countBy(rows,'status'),priorityCounts=countBy(rows,'priority');
-  document.getElementById('issueKpis').innerHTML=
-    '<div class="kpi" style="cursor:default"><div class="k-label">Total issues</div><div class="k-val">'+fmtInt(rows.length)+'</div></div>'+
-    '<div class="kpi" style="cursor:default"><div class="k-label">Active</div><div class="k-val">'+fmtInt(active)+'</div></div>'+
-    '<div class="kpi" style="cursor:default"><div class="k-label">Closed</div><div class="k-val">'+fmtInt(closed)+'</div></div>'+
-    '<div class="kpi" style="cursor:default"><div class="k-label">Overdue active</div><div class="k-val">'+fmtInt(overdue)+'</div></div>';
-  upsert('issueStatusChart',{type:'bar',data:{labels:statusCounts.map(x=>x[0]),datasets:[{label:'Issues',data:statusCounts.map(x=>x[1]),backgroundColor:cssVar('--accent')}]},options:{plugins:{legend:{display:false}},scales:{x:{grid:{display:false}},y:{beginAtZero:true,grid:{color:gridColor()}}}}});
-  upsert('issuePriorityChart',{type:'bar',data:{labels:priorityCounts.map(x=>x[0]),datasets:[{label:'Issues',data:priorityCounts.map(x=>x[1]),backgroundColor:cssVar('--st-late')}]},options:{plugins:{legend:{display:false}},scales:{x:{grid:{display:false}},y:{beginAtZero:true,grid:{color:gridColor()}}}}});
-  let h='<thead><tr><th>Issue</th><th>Status</th><th>Priority</th><th>Discipline</th><th>Issue Type</th><th>Equipment / Source</th><th>Assigned To</th><th>Due Date</th><th>Created</th></tr></thead><tbody>';
-  if(!rows.length)h+='<tr><td colspan="9" class="empty">No issue data available.</td></tr>';
-  rows.forEach(r=>{const src=txtValue(r.asset_name)||txtValue(r.source_name);h+='<tr><td>'+esc(txtValue(r.name)||txtValue(r.issue_id))+'</td><td>'+esc(r.status)+'</td><td>'+esc(r.priority)+'</td><td>'+esc(r.discipline)+'</td><td>'+esc(r.issuetype)+'</td><td>'+esc(src)+'</td><td>'+esc(r.assigned_name)+'</td><td>'+esc(r.due_date)+'</td><td>'+esc(r.date_created)+'</td></tr>';});
-  document.getElementById('issueTbl').innerHTML=h+'</tbody>';
-  document.getElementById('issueMeta').textContent=fmtInt(rows.length)+' issues · '+fmtInt(active)+' active · '+fmtInt(overdue)+' overdue';
-  setTimeout(()=>dashEnhanceTable('issueTbl'),0);
+function tagAchieved(r,level){
+  const fields={
+    L1:'l1_red_tag_date',L2:'l2_yellow_tag_date',L3:'l3_green_tag_date',L4:'l4_blue_tag_date',L5:'l5_white_tag_date'
+  };
+  return !!txtValue(r[fields[level]]);
+}
+function projectTrancheMap(){
+  const counts=new Map();
+  extraPageState.equipment.forEach(r=>{
+    const p=txtValue(r.project_id),t=txtValue(r.tranche);if(!p||!t)return;
+    const key=p+'|'+t;counts.set(key,(counts.get(key)||0)+1);
+  });
+  const byProject=new Map();
+  counts.forEach((n,key)=>{
+    const [p,t]=key.split('|'),prev=byProject.get(p);
+    if(!prev||n>prev.n)byProject.set(p,{t,n});
+  });
+  return new Map([...byProject].map(([p,x])=>[p,x.t]));
+}
+function equipmentTrancheMap(){
+  const m=new Map();
+  extraPageState.equipment.forEach(r=>{
+    const name=txtValue(r.name),t=txtValue(r.tranche);
+    if(name&&t)m.set(name,t);
+  });
+  return m;
+}
+function issueTranche(r,eqMap,projMap){
+  const asset=txtValue(r.asset_name);
+  if(asset&&eqMap.has(asset))return eqMap.get(asset);
+  const src=txtValue(r.source_name);
+  if(src&&eqMap.has(src))return eqMap.get(src);
+  return projMap.get(txtValue(r.project_id))||'Unassigned';
+}
+function issueCriticalities(){
+  const vals=[...new Set(extraPageState.issues.map(r=>txtValue(r.priority)||'Unspecified'))];
+  const rank=v=>{const x=v.toLowerCase();if(x==='critical')return 0;if(x==='non-critical'||x==='non critical')return 1;if(x==='unspecified')return 99;return 10;};
+  return vals.sort((a,b)=>rank(a)-rank(b)||a.localeCompare(b));
+}
+function renderExternalEquipmentSummary(){
+  const rows=extraPageState.equipment,tranches=externalTranches(),levels=['L1','L2','L3','L4','L5'];
+  let h='<thead><tr><th>Tranche</th><th class="num">Equipment</th>'+levels.map(l=>'<th class="num">'+l+' Tag</th>').join('')+'</tr></thead><tbody>';
+  const makeRow=(label,rs)=>'<tr><td><b>'+esc(label)+'</b></td><td class="num">'+fmtInt(rs.length)+'</td>'+levels.map(l=>'<td class="num">'+fmtInt(rs.filter(r=>tagAchieved(r,l)).length)+'</td>').join('')+'</tr>';
+  tranches.forEach(t=>{h+=makeRow(t,rows.filter(r=>txtValue(r.tranche)===t));});
+  h+=makeRow('Total / All Tranches',rows);
+  document.getElementById('externalEqSummaryTbl').innerHTML=h+'</tbody>';
+  setTimeout(()=>dashEnhanceTable('externalEqSummaryTbl'),0);
+}
+function renderExternalEquipmentRegister(){
+  const rows=extraPageState.equipment.slice().sort((a,b)=>trancheSort(a.tranche,b.tranche)||txtValue(a.name).localeCompare(txtValue(b.name),undefined,{numeric:true}));
+  let h='<thead><tr><th>Equipment Name / ELI</th><th>Tranche</th><th>Current Status</th></tr></thead><tbody>';
+  if(!rows.length)h+='<tr><td colspan="3" class="empty">No equipment data available.</td></tr>';
+  rows.forEach(r=>{h+='<tr><td>'+esc(r.name)+'</td><td>'+esc(r.tranche)+'</td><td>'+esc(r.status)+'</td></tr>';});
+  document.getElementById('externalEquipmentTbl').innerHTML=h+'</tbody>';
+  setTimeout(()=>dashEnhanceTable('externalEquipmentTbl'),0);
+}
+function renderExternalIssueSummary(){
+  const rows=extraPageState.issues,eqMap=equipmentTrancheMap(),projMap=projectTrancheMap();
+  const priorities=issueCriticalities(),tranches=externalTranches();
+  const enriched=rows.map(r=>({r,tranche:issueTranche(r,eqMap,projMap),closed:statusIsClosed(r),priority:txtValue(r.priority)||'Unspecified'}));
+  const unmatched=enriched.some(x=>x.tranche==='Unassigned');
+  const labels=unmatched?[...tranches,'Unassigned']:tranches.slice();
+  let h='<thead><tr><th>Tranche</th><th class="num">Total Issues</th>'+
+    priorities.map(p=>'<th class="num">Open · '+esc(p)+'</th>').join('')+
+    priorities.map(p=>'<th class="num">Closed · '+esc(p)+'</th>').join('')+
+    '</tr></thead><tbody>';
+  const makeRow=(label,items)=>'<tr><td><b>'+esc(label)+'</b></td><td class="num">'+fmtInt(items.length)+'</td>'+
+    priorities.map(p=>'<td class="num">'+fmtInt(items.filter(x=>!x.closed&&x.priority===p).length)+'</td>').join('')+
+    priorities.map(p=>'<td class="num">'+fmtInt(items.filter(x=>x.closed&&x.priority===p).length)+'</td>').join('')+
+    '</tr>';
+  labels.forEach(t=>{h+=makeRow(t,enriched.filter(x=>x.tranche===t));});
+  h+=makeRow('Total / All Tranches',enriched);
+  document.getElementById('externalIssueSummaryTbl').innerHTML=h+'</tbody>';
+  setTimeout(()=>dashEnhanceTable('externalIssueSummaryTbl'),0);
+}
+function renderExternalPage(){
+  renderExternalEquipmentSummary();
+  renderExternalEquipmentRegister();
+  renderExternalIssueSummary();
+  const stamps=[...extraPageState.equipment.map(r=>txtValue(r.last_synced)),...extraPageState.issues.map(r=>txtValue(r.last_synced))].filter(Boolean).sort();
+  document.getElementById('externalDataAsOf').textContent=stamps.length?'Data snapshot: '+stamps[stamps.length-1]:'External status summary';
+}
+function printExternalPage(){
+  document.body.classList.add('print-external');
+  window.print();
+  setTimeout(()=>document.body.classList.remove('print-external'),500);
 }
 async function loadExtraPages(){
   try{
@@ -2553,14 +2619,16 @@ async function loadExtraPages(){
       fetch('./data/equipment_status.csv',{cache:'no-store'}),
       fetch('./data/issues.csv',{cache:'no-store'})
     ]);
-    if(e.ok)extraPageState.equipment=await csvParseText(await e.text());
-    if(i.ok)extraPageState.issues=await csvParseText(await i.text());
-    renderEquipmentStatusPage();
-    renderIssueSummaryPage();
+    if(!e.ok)throw new Error('Equipment status HTTP '+e.status);
+    if(!i.ok)throw new Error('Issue status HTTP '+i.status);
+    extraPageState.equipment=await csvParseText(await e.text());
+    extraPageState.issues=await csvParseText(await i.text());
+    renderExternalPage();
   }catch(err){
-    console.error('Extra page data failed to load',err);
-    const em=document.getElementById('eqStatusTbl');if(em)em.innerHTML='<tbody><tr><td class="empty">Equipment status data failed to load.</td></tr></tbody>';
-    const im=document.getElementById('issueTbl');if(im)im.innerHTML='<tbody><tr><td class="empty">Issue data failed to load.</td></tr></tbody>';
+    console.error('External status data failed to load',err);
+    const a=document.getElementById('externalEqSummaryTbl');if(a)a.innerHTML='<tbody><tr><td class="empty">External equipment data failed to load.</td></tr></tbody>';
+    const b=document.getElementById('externalEquipmentTbl');if(b)b.innerHTML='<tbody><tr><td class="empty">External equipment data failed to load.</td></tr></tbody>';
+    const c=document.getElementById('externalIssueSummaryTbl');if(c)c.innerHTML='<tbody><tr><td class="empty">External issue data failed to load.</td></tr></tbody>';
   }
 }
 
@@ -2597,7 +2665,9 @@ function wire(){
   document.getElementById('dTo').onchange   = e=>{ const d=e.target.valueAsDate; state.dTo   = d?startOfDay(new Date(d.getUTCFullYear(),d.getUTCMonth(),d.getUTCDate())):null; refresh(); };
   document.getElementById('resetBtn').onclick = resetAll;
   document.getElementById('exportBtn').onclick = exportCSV;
-  document.getElementById('printBtn').onclick = ()=>window.print();
+  document.getElementById('printBtn').onclick = ()=>document.getElementById('page-external-status').classList.contains('on')?printExternalPage():window.print();
+  document.getElementById('externalPrintBtn').onclick = printExternalPage;
+  window.addEventListener('afterprint',()=>document.body.classList.remove('print-external'));
   document.getElementById('themeBtn').onclick = ()=>{
     const r=document.documentElement;
     r.dataset.theme = r.dataset.theme==='dark'?'light':'dark';
