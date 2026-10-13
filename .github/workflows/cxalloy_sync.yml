@@ -8,6 +8,7 @@ on:
       - 'cxalloy_checklist_to_csv.py'
       - 'cxalloy_checklist_lines_to_csv.py'
       - 'cxalloy_issue_to_csv.py'
+      - 'cxalloy_l4_sync.py'
       - 'build_equipment_checklist_snapshot.py'
       - 'build_checklist_daily_history.py'
       - '.github/workflows/cxalloy_sync.yml'
@@ -36,6 +37,9 @@ jobs:
       - name: Install dependencies
         run: pip install requests
 
+      - name: Verify L4 completion and extraction rules
+        run: python -m unittest -q test_l4_sync.py
+
       - name: Fetch CxAlloy equipment data and write CSV
         env:
           CXALLOY_IDENTIFIER: ${{ secrets.CXALLOY_IDENTIFIER }}
@@ -57,6 +61,16 @@ jobs:
           CXALLOY_PROJECT_ID: ${{ vars.CXALLOY_PROJECT_ID }}
         run: python cxalloy_checklist_lines_to_csv.py
 
+      - name: Fetch L4 tests, attempts and latest-step progress
+        id: l4
+        continue-on-error: true
+        env:
+          CXALLOY_IDENTIFIER: ${{ secrets.CXALLOY_IDENTIFIER }}
+          CXALLOY_SECRET: ${{ secrets.CXALLOY_SECRET }}
+          CXALLOY_PROJECT_ID: ${{ vars.CXALLOY_PROJECT_ID }}
+          L4_COMPLETE_STATUSES: ${{ vars.L4_COMPLETE_STATUSES || 'passed,completed,reviewed' }}
+        run: python cxalloy_l4_sync.py
+
       - name: Fetch CxAlloy issue log and write CSV
         env:
           CXALLOY_IDENTIFIER: ${{ secrets.CXALLOY_IDENTIFIER }}
@@ -74,4 +88,11 @@ jobs:
         uses: stefanzweifel/git-auto-commit-action@v5
         with:
           commit_message: "Daily CxAlloy sync"
-          file_pattern: 'data/equipment_status.csv data/checklist_status.csv data/checklist_progress_current.csv data/checklist_progress_daily.csv data/checklist_progress_history.csv data/checklist_completion_by_equipment.csv data/checklist_progress_daily_type.csv data/checklist_progress_equipment_changes.csv data/issues.csv'
+          file_pattern: 'data/equipment_status.csv data/checklist_status.csv data/checklist_progress_current.csv data/checklist_progress_daily.csv data/checklist_progress_history.csv data/checklist_completion_by_equipment.csv data/checklist_progress_daily_type.csv data/checklist_progress_equipment_changes.csv data/issues.csv data/l4_current.json data/l4_daily.csv data/l4_tests.csv'
+
+
+      - name: Report L4 sync failure after preserving existing dashboard updates
+        if: steps.l4.outcome == 'failure'
+        run: |
+          echo "L4 sync failed. Existing dashboard data was updated; previous L4 snapshot retained."
+          exit 1
