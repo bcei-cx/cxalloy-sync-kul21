@@ -136,13 +136,18 @@ def normalize_line(line):
     actionable = txt(line.get("type")).lower() not in DISPLAY_TYPES
     na = actionable and status_key(answer) in NA
     answered = actionable and any(present(line.get(k)) for k in ("answer", "value", "attribute_value"))
+    # Legacy CxAlloy test questions return yes/no/na rather than passed/failed.
+    # Text-input values such as "no" are not pass/fail answers.
+    question = txt(line.get("type")).lower() == "standard_question"
+    failed = actionable and (status_key(answer) in {"failed", "fail", "f"}
+                              or (question and status_key(answer) in {"no", "n"}))
     return {
         "id": txt(line.get("testattemptline_id")), "number": line.get("line_number", ""),
         "description": txt(line.get("description")), "type": txt(line.get("type")),
         "answer": answer, "value": value, "attribute": txt(line.get("attribute")),
         "attribute_value": line.get("attribute_value"), "unit": txt(line.get("attribute_unit")),
         "note": txt(line.get("note")), "actionable": actionable, "na": na,
-        "answered": answered, "failed": actionable and status_key(answer) in {"failed", "fail", "f"},
+        "answered": answered, "failed": failed,
     }
 
 

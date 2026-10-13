@@ -24,6 +24,12 @@ def test(tid=1, status="Passed", attempts=None, asset="equipment-10", name="UPS-
 
 
 class L4Tests(unittest.TestCase):
+    def test_legacy_no_is_failed_for_questions_only(self):
+        no = normalize_line({"type": "standard_question", "answer": "no"})
+        self.assertTrue(no["failed"])
+        self.assertTrue(no["answered"])
+        self.assertFalse(normalize_line({"type": "text_input", "value": "no"})["failed"])
+
     def test_zero_reading_and_empty_metadata(self):
         self.assertTrue(normalize_line({"type": "attribute", "attribute_value": 0})["answered"])
         self.assertFalse(normalize_line({"type": "attribute", "value": {"is_valid": True, "value": ""}})["answered"])
