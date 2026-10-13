@@ -24,6 +24,8 @@ const server=http.createServer((req,res)=>{
   await page.goto('http://127.0.0.1:'+server.address().port+'/#l4-overview');
   await page.waitForSelector('#l4Kpis .kpi');
   assert((await page.locator('#l4Kpis').innerText()).includes('33.3%'));
+  assert(await page.locator('#page-l4-overview').evaluate(el=>el.parentElement.classList.contains('wrap')));
+  assert(await page.locator('#l4Execution .l4-track').first().evaluate(el=>el.clientWidth>100));
   await page.click('[data-page="l4-equipment"]');
   assert.equal(await page.locator('#l4EquipmentRows tr').count(),100);
   await page.click('[data-l4-next="equipment"]');
