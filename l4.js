@@ -46,6 +46,7 @@
     document.addEventListener('input',event=>{if(event.target.dataset.l4Field==='q'){s.q=event.target.value;s.ePage=s.tPage=0;renderEquipment();renderTests();byId('l4TestDetail').hidden=true;document.querySelectorAll('[data-l4-field="q"]').forEach(input=>{if(input!==event.target)input.value=s.q;});}});
     byId('l4ClearEquipment').onclick=()=>{s.asset=null;s.tPage=0;renderTests();byId('l4TestDetail').hidden=true;};
     new MutationObserver(()=>{if(s.data)renderTrend();}).observe(document.documentElement,{attributes:true,attributeFilter:['data-theme','data-palette']});
+    document.querySelectorAll('.page-nav button[data-page]').forEach(button=>button.addEventListener('click',()=>history.replaceState(null,'',button.dataset.page.startsWith('l4-')?'#'+button.dataset.page:location.pathname+location.search)));
     const page=location.hash.slice(1);if(['l4-overview','l4-equipment','l4-tests'].includes(page))showPage(page);load();
   }
   document.addEventListener('DOMContentLoaded',boot);
