@@ -151,7 +151,7 @@ thead th.nosort{cursor:default}
 tbody tr:hover{background:var(--line-2)}
 td.num,th.num{text-align:right;font-variant-numeric:tabular-nums}
 .pill{display:inline-block;padding:1px 7px;border-radius:999px;font-size:10.5px;font-weight:600;border:1px solid transparent}
-.pill.Hit{background:rgba(33,163,102,.13);color:var(--st-hit)}
+.pill.Complete,.pill.Hit{background:rgba(33,163,102,.13);color:var(--st-hit)}
 .pill.Late{background:rgba(245,124,0,.14);color:var(--st-late)}
 .pill.Overdue{background:rgba(198,40,40,.13);color:var(--st-overdue)}
 .pill.Pending{background:rgba(107,114,128,.14);color:var(--st-pending)}
@@ -567,7 +567,7 @@ const DIMS = [
   {k:'area',      t:'Area'},
   {k:'vendor',    t:'Equipment Supplier'}
 ];
-const STATUSES = ['Hit','Late','Overdue','Pending','Skipped'];
+const STATUSES = ['Hit','Late','Complete','Overdue','Pending','Skipped'];
 const BLANK = '(blank)';
 
 /* -------------------------------------------------------------------- STATE */
@@ -773,13 +773,22 @@ function normalizeVendor(v){
 }
 
 /* ============================================================= 3. TRANSFORM */
+/** Current status determines completion; history dates are used only for dated reporting. */
+function statusCompletionLevel(status){
+  const stages = {'NO TAG':0,'L1 RED TAG':1,'CONDITIONAL YELLOW TAG':1,
+    'L2 YELLOW TAG':2,'ENERGIZED':2,'L3 GREEN TAG':3,'L4 BLUE TAG':4,'L5 WHITE TAG':5};
+  const key = txtValue(status).toUpperCase();
+  return Object.prototype.hasOwnProperty.call(stages,key) ? stages[key] : null;
+}
 /** Compute achievement, current level, variance and per-level classification. */
 function transform(rows){
   rows.forEach(r=>{
-    LK.forEach(k=>{
+    const statusLevel = r.source ? statusCompletionLevel(r.eqStatus) : null;
+    LK.forEach((k,i)=>{
       const t = r.tags[k];
-      t.achieved = !!t.act && !t.skipped;                 // skipped never counts as achieved
-      t.variance = (t.act && t.proj) ? dayDiff(t.act, t.proj) : null;
+      t.achieved = !t.skipped && (statusLevel===null ? !!t.act : i<statusLevel);
+      t.missingActual = t.achieved && !t.act;
+      t.variance = (t.achieved && t.act && t.proj) ? dayDiff(t.act, t.proj) : null;
     });
     // Highest CONSECUTIVE level achieved (skipped levels are transparent).
     let lvl = 0;
@@ -805,7 +814,7 @@ function classify(asOf){
     LK.forEach(k=>{
       const t = r.tags[k];
       if(t.skipped)                       t.cls = 'Skipped';
-      else if(t.achieved)                 t.cls = (t.proj && t.act > t.proj) ? 'Late' : 'Hit';
+      else if(t.achieved)                 t.cls = !t.act ? 'Complete' : (t.proj && t.act > t.proj) ? 'Late' : 'Hit';
       else if(t.proj && t.proj < asOf)    t.cls = 'Overdue';
       else                                t.cls = 'Pending';
       t.age = (t.cls==='Overdue') ? dayDiff(asOf, t.proj) : 0;
@@ -827,7 +836,7 @@ function applyFilters(){
       for(const k of levels){
         const t = r.tags[k]; if(!t) continue;
         if(stSel.length){ if(stSel.includes(t.cls)){ ok=true; break; } }
-        else if(!t.skipped && (t.act||t.proj)){ ok=true; break; }
+        else if(!t.skipped && (t.achieved||t.proj)){ ok=true; break; }
       }
       if(!ok) return false;
     }
@@ -876,7 +885,7 @@ function overall(rows){
 }
 function countInWeek(rows, ws){
   const we = addWeeks(ws,1); let n=0;
-  rows.forEach(r=>LK.forEach(k=>{ const t=r.tags[k]; if(t.achieved && t.act>=ws && t.act<we) n++; }));
+  rows.forEach(r=>LK.forEach(k=>{ const t=r.tags[k]; if(t.achieved && t.act && t.act>=ws && t.act<we) n++; }));
   return n;
 }
 function lookAheadWeek(rows, ws){
@@ -897,7 +906,7 @@ function sCurveSeries(rows){
   src.forEach(r=>lv.forEach(k=>{
     const t=r.tags[k]; if(t.skipped) return;
     if(t.proj) plan.push(t.proj);
-    if(t.achieved) act.push(t.act);
+    if(t.achieved && t.act) act.push(t.act);
   }));
   if(!plan.length && !act.length) return null;
   const all = plan.concat(act);
@@ -946,7 +955,7 @@ function levelCumulative(rows, k, weeks, iNow){
   rows.forEach(r=>{
     const t = r.tags[k]; if(!t || t.skipped) return;
     if(t.proj) plan.push(t.proj);
-    if(t.achieved) act.push(t.act);
+    if(t.achieved && t.act) act.push(t.act);
   });
   const bucket = (arr)=>{ const m=new Map(); arr.forEach(d=>{const w=weekStart(d).getTime(); m.set(w,(m.get(w)||0)+1);}); return m; };
   const pm = bucket(plan), am = bucket(act);
@@ -1063,7 +1072,7 @@ function renderKPIs(){
       val: fmtInt(s.achieved)+' <small>/ '+fmtInt(s.total)+'</small>',
       big: fpct(s.achieved,s.total),
       bar: {p:pct(s.achieved,s.total), color:'var('+l.varc+')', outline:l.k==='L5'},
-      sub: per + (s.skipped? ' · '+s.skipped+' skipped':''),
+      sub: per + (s.skipped? ' · '+s.skipped+' skipped':'') + (rows.some(r=>r.tags[l.k].missingActual) ? ' · '+fmtInt(rows.filter(r=>r.tags[l.k].missingActual).length)+' complete without date' : ''),
       active: state.filters.level.has(l.k),
       action:()=>{ toggleSet(state.filters.level, l.k); refresh(); }
     }));
@@ -1358,7 +1367,7 @@ function renderVelocity(){
   const weeks = []; for(let i=7;i>=0;i--) weeks.push(addWeeks(thisW,-i));
   const per = LEVELS.map(l=>({l, data: weeks.map(w=>{
     const we = addWeeks(w,1); let n=0;
-    state.filtered.forEach(r=>{ const t=r.tags[l.k]; if(t.achieved && t.act>=w && t.act<we) n++; });
+    state.filtered.forEach(r=>{ const t=r.tags[l.k]; if(t.achieved && t.act && t.act>=w && t.act<we) n++; });
     return n; })}));
   const totals = weeks.map((_,i)=>per.reduce((a,p)=>a+p.data[i],0));
   const roll = totals.map((_,i)=>{ const s=Math.max(0,i-3); const sl=totals.slice(s,i+1); return +(sl.reduce((a,b)=>a+b,0)/sl.length).toFixed(1); });
@@ -1709,6 +1718,8 @@ function renderInsights(){
 
   // 1 · Schedule slip and forecast impact
   const sc = sCurveSeries(rows);
+  const missingDates = rows.reduce((n,r)=>n+LK.filter(k=>r.tags[k].missingActual).length,0);
+  if(missingDates) add('watch',fmtInt(missingDates)+' completed levels have no actual date. Completion totals use current equipment status; S-curves, dated forecasts and on-time assessments use recorded dates only.');
   if(sc && sc.spi!=null){
     const days = sc.slipWeeks*7;
     const delta = dayDiff(sc.finishWeek, sc.plannedFinish);
@@ -1794,7 +1805,7 @@ function renderInsights(){
 }
 function dataQualityIssues(rows){
   const out=[];
-  let noProj=0, implausible=0, blankVendor=0, blankArea=0;
+  let noProj=0, implausible=0, blankVendor=0, blankArea=0, missingActual=0;
   const seen = new Set(), dupes = new Set();
   rows.forEach(r=>{
     if(seen.has(r.eli)) dupes.add(r.eli); else seen.add(r.eli);
@@ -1802,15 +1813,17 @@ function dataQualityIssues(rows){
     if(r.area===BLANK) blankArea++;
     LK.forEach(k=>{ const t=r.tags[k];
       if(!t.skipped && !t.proj && !t.achieved) noProj++;
+      if(t.missingActual) missingActual++;
       if(t.variance!=null && t.variance < -60) implausible++;
     });
   });
+  if(missingActual) out.push(fmtInt(missingActual)+' completed levels have no actual date; included in completion totals, excluded from dated charts and on-time assessment');
   if(noProj) out.push(fmtInt(noProj)+' open tags with no projected date');
   if(implausible) out.push(fmtInt(implausible)+' actuals more than 60 days before their projected date');
   if(dupes.size) out.push(dupes.size+' duplicate ELI codes');
   if(blankVendor) out.push(blankVendor+' rows with no equipment supplier');
   if(blankArea) out.push(blankArea+' rows with no area');
-  if(state.unparsed) out.push(state.unparsed+' unparsable date cells (treated as not achieved)');
+  if(state.unparsed) out.push(state.unparsed+' unparsable date cells (excluded from dated reporting)');
   if(state.projectedStats){
     if(state.projectedStats.unmatchedEquipment) out.push(state.projectedStats.unmatchedEquipment+' equipment rows have no matching projected-date ELI');
     if(state.projectedStats.duplicateProjectedRows) out.push(state.projectedStats.duplicateProjectedRows+' duplicate projected-date rows collapsed by ELI');
@@ -2534,7 +2547,8 @@ function tagAchieved(r,level){
   const fields={
     L1:'l1_red_tag_date',L2:'l2_yellow_tag_date',L3:'l3_green_tag_date',L4:'l4_blue_tag_date',L5:'l5_white_tag_date'
   };
-  return !!txtValue(r[fields[level]]);
+  const reached = statusCompletionLevel(r.status);
+  return reached===null ? !!txtValue(r[fields[level]]) : Number(level.slice(1))<=reached;
 }
 function projectTrancheMap(){
   const counts=new Map();
