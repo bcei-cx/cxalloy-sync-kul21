@@ -36,6 +36,8 @@ jobs:
       - name: Install dependencies
         run: pip install requests
 
+      # Refresh tranche attributes and current status; historical tag dates may be blank.
+      # Dashboard completion uses current status without inventing missing dates.
       - name: Fetch CxAlloy equipment data and write CSV
         env:
           CXALLOY_IDENTIFIER: ${{ secrets.CXALLOY_IDENTIFIER }}
