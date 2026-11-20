@@ -1,0 +1,64 @@
+name: CxAlloy Checklist Signature Report
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  report:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Check report password
+        env:
+          REPORT_PASSWORD: ${{ secrets.CXALLOY_REPORT_PASSWORD }}
+        run: |
+          if [[ -z "$REPORT_PASSWORD" ]]; then
+            echo "::error::Add the CXALLOY_REPORT_PASSWORD repository Actions secret before running this report."
+            exit 1
+          fi
+
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: python -m pip install requests pyzipper
+
+      - name: Generate checklist signature CSV
+        env:
+          CXALLOY_IDENTIFIER: ${{ secrets.CXALLOY_IDENTIFIER }}
+          CXALLOY_SECRET: ${{ secrets.CXALLOY_SECRET }}
+          CXALLOY_PROJECT_ID: '39282'
+        run: python cxalloy_checklist_signature_report.py
+
+      - name: Encrypt report before uploading
+        env:
+          REPORT_PASSWORD: ${{ secrets.CXALLOY_REPORT_PASSWORD }}
+        run: |
+          python - <<'PY'
+          import os
+          import pyzipper
+
+          with pyzipper.AESZipFile(
+              "checklist_signature_status.zip",
+              "w",
+              compression=pyzipper.ZIP_DEFLATED,
+              encryption=pyzipper.WZ_AES,
+          ) as archive:
+              archive.setpassword(os.environ["REPORT_PASSWORD"].encode("utf-8"))
+              archive.write("checklist_signature_status.csv")
+          PY
+
+      - name: Upload password-protected report
+        uses: actions/upload-artifact@v4
+        with:
+          name: KUL21-checklist-signature-status
+          path: checklist_signature_status.zip
+          if-no-files-found: error
