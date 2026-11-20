@@ -1,8 +1,11 @@
 """Preview or add missing KUL21 checklist signature roles."""
 import csv
+import hashlib
+import hmac
 import json
 import os
 import re
+import time
 
 import requests
 
@@ -10,7 +13,6 @@ from cxalloy_checklist_lines_to_csv import (
     CXALLOY_BASE_URL,
     CXALLOY_PROJECT_IDS,
     lines_from_checklist,
-    post_headers,
     post_json_with_retry,
     throttle_request_rate,
 )
@@ -129,6 +131,22 @@ def write_error_detail(response):
     return " | ".join(details)
 
 
+def write_headers(body):
+    # Match the timestamp unit used by CxAlloy's published Postman POST script.
+    timestamp = str(time.time_ns() // 1_000_000)
+    signature = hmac.new(
+        os.environ["CXALLOY_SECRET"].encode(), body + timestamp.encode(), hashlib.sha256
+    ).hexdigest()
+    return {
+        "Content-Type": "application/json",
+        "cache-control": "no-cache",
+        "cxalloy-identifier": os.environ["CXALLOY_IDENTIFIER"],
+        "cxalloy-signature": signature,
+        "cxalloy-timestamp": timestamp,
+        "user-agent": "GitHubActions-CxAlloySync/1.0",
+    }
+
+
 def create_line(project_id, checklist_id, role):
     body = json.dumps({
         "project_id": int(project_id),
@@ -137,13 +155,13 @@ def create_line(project_id, checklist_id, role):
         "title": role,
         "description": f"{role} sign-off",
         "allow_na": False,
-    }, separators=(",", ":"))
+    }, separators=(",", ":")).encode("utf-8")
     # Creation is non-idempotent. Let a subsequent run re-read the checklist
     # before retrying a request whose outcome is uncertain.
     throttle_request_rate()
     response = requests.post(
         f"{CXALLOY_BASE_URL}/checklistline_create",
-        headers=post_headers(body),
+        headers=write_headers(body),
         data=body,
         timeout=60,
         allow_redirects=False,
