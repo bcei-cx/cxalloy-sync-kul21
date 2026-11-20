@@ -116,7 +116,6 @@ def checklist_records(project_id):
     page = 1
     legacy = False
     seen = set()
-    reported_total = None
     while True:
         try:
             payload = fetch_checklist_page(project_id, page, legacy_mode=legacy)
@@ -129,12 +128,6 @@ def checklist_records(project_id):
         records = payload.get("records") if isinstance(payload, dict) else None
         if not isinstance(records, list):
             raise ValueError(f"Missing checklist records on API page {page}")
-        if isinstance(payload.get("total_count"), (int, str)):
-            total = int(payload["total_count"])
-            if reported_total is not None and total != reported_total:
-                raise ValueError("Checklist total changed during pagination. Run the report again.")
-            reported_total = total
-
         for checklist in records:
             checklist_id = str(checklist.get("checklist_id") or checklist.get("id") or "")
             if not checklist_id or checklist_id in seen:
@@ -142,9 +135,10 @@ def checklist_records(project_id):
             seen.add(checklist_id)
             yield checklist_id, checklist
 
-        if reported_total == len(seen) or len(records) < PER_PAGE:
-            if reported_total is not None and reported_total != len(seen):
-                raise ValueError("Checklist count does not match the API total. Run the report again.")
+        # CxAlloy can report the first page size as total_count even when
+        # additional pages exist. A short page marks the end of the listing.
+        if len(records) < PER_PAGE:
+            print(f"Project {project_id}: exported {len(seen)} checklists across {page} pages.")
             return
         page += 1
 
