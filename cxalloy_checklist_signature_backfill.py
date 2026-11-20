@@ -101,6 +101,20 @@ def create_line(project_id, checklist_id, role):
         data=body,
         timeout=60,
     )
+    if response.status_code == 403:
+        detail = response.text.casefold().replace("_", " ").replace("-", " ")
+        if re.search(r"read only|read[ /]+write|write (access|permission)", detail):
+            reason = "CxAlloy cited API key write permissions."
+        elif re.search(r"locked|reviewed|already (closed|completed)|cannot edit", detail):
+            reason = "CxAlloy cited a checklist edit restriction."
+        elif re.search(r"project scope|project access|access to (this|the) project|account scope|account scoped", detail):
+            reason = "CxAlloy cited project or account scope."
+        else:
+            reason = "The response did not identify a specific permission or checklist restriction."
+        request_id = response.headers.get("X-Request-ID", "")
+        if re.fullmatch(r"[0-9A-Fa-f-]{8,64}", request_id):
+            reason += f" CxAlloy request ID: {request_id}."
+        raise RuntimeError(f"CxAlloy denied checklistline_create (HTTP 403). {reason}")
     response.raise_for_status()
 
 
