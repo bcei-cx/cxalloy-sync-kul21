@@ -83,6 +83,52 @@ def read_checklist(project_id, checklist_id):
     return checklist
 
 
+def write_error_detail(response):
+    """Report the API's error message without dumping headers or a response body."""
+    content_type = response.headers.get("Content-Type", "").split(";")[0].lower().strip()
+    try:
+        payload = response.json()
+    except ValueError:
+        payload = None
+    message = ""
+    if isinstance(payload, dict):
+        for key in ("message", "error_description", "detail", "error", "description"):
+            value = payload.get(key)
+            if isinstance(value, dict):
+                value = value.get("message") or value.get("detail")
+            if isinstance(value, str) and value.strip():
+                message = value
+                break
+    elif isinstance(payload, str):
+        message = payload
+    elif content_type == "text/plain" and not response.text.lstrip().startswith(("<", "{", "[")):
+        message = response.text.splitlines()[0] if response.text else ""
+
+    # The repository's Actions logs are public. Never emit credentials or request dumps.
+    for name in ("CXALLOY_IDENTIFIER", "CXALLOY_SECRET", "BACKFILL_IDENTIFIER", "BACKFILL_SECRET"):
+        secret = os.environ.get(name)
+        if secret:
+            message = message.replace(secret, "[redacted]")
+    message = next((line.strip() for line in message.splitlines() if line.strip()), "")
+    message = re.sub(
+        r"(?i)\b(?:authorization|token|password|api[_ -]?key|secret|cxalloy-(?:identifier|signature))"
+        r"\s*[:=]\s*[^,;]+", "[redacted]", message,
+    )
+    message = re.sub(r"(?i)\b(?:https?://|bearer\s+)\S+", "[redacted]", message)
+    message = re.sub(r"(?i)\b[\w.+%-]+@[\w.-]+\.[a-z]{2,}\b|[\w+/=-]{24,}", "[redacted]", message)
+    message = " ".join(message.split())[:320]
+    if not message or "<" in message or ">" in message:
+        message = "No usable API error message in the response."
+    details = [message]
+    if re.fullmatch(r"[a-z0-9.+-]+/[a-z0-9.+-]+", content_type):
+        details.append(f"Content-Type={content_type}")
+    for header in ("X-Request-ID", "CF-Ray", "X-Amz-Cf-Id"):
+        ref = response.headers.get(header, "")
+        if re.fullmatch(r"[a-zA-Z0-9_+/=-]{4,128}", ref):
+            details.append(f"{header}={ref}")
+    return " | ".join(details)
+
+
 def create_line(project_id, checklist_id, role):
     body = json.dumps({
         "project_id": int(project_id),
@@ -100,22 +146,13 @@ def create_line(project_id, checklist_id, role):
         headers=post_headers(body),
         data=body,
         timeout=60,
+        allow_redirects=False,
     )
-    if response.status_code == 403:
-        detail = response.text.casefold().replace("_", " ").replace("-", " ")
-        if re.search(r"read only|read[ /]+write|write (access|permission)", detail):
-            reason = "CxAlloy cited API key write permissions."
-        elif re.search(r"locked|reviewed|already (closed|completed)|cannot edit", detail):
-            reason = "CxAlloy cited a checklist edit restriction."
-        elif re.search(r"project scope|project access|access to (this|the) project|account scope|account scoped", detail):
-            reason = "CxAlloy cited project or account scope."
-        else:
-            reason = "The response did not identify a specific permission or checklist restriction."
-        request_id = response.headers.get("X-Request-ID", "")
-        if re.fullmatch(r"[0-9A-Fa-f-]{8,64}", request_id):
-            reason += f" CxAlloy request ID: {request_id}."
-        raise RuntimeError(f"CxAlloy denied checklistline_create (HTTP 403). {reason}")
-    response.raise_for_status()
+    if not 200 <= response.status_code < 300:
+        raise RuntimeError(
+            f"Creating {role} signature line returned HTTP {response.status_code}. "
+            f"{write_error_detail(response)}"
+        )
 
 
 def add_missing(project_id, checklist_id):
