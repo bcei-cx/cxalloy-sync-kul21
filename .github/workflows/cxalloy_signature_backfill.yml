@@ -1,0 +1,71 @@
+name: CxAlloy Checklist Signature Backfill
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: Preview, pilot one checklist, or apply a batch
+        type: choice
+        options: [preview, pilot, apply]
+        default: preview
+      batch_size:
+        description: Maximum checklists to update in apply mode (1 to 2000)
+        type: number
+        default: 500
+      pilot_project_id:
+        description: Project ID for pilot mode
+        type: string
+      pilot_checklist_id:
+        description: CxAlloy checklist ID for pilot mode (use the CSV checklist_id)
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cxalloy-signature-backfill
+
+jobs:
+  backfill:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 330
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: python -m pip install requests
+
+      - name: Preview or add missing signature lines
+        env:
+          BACKFILL_MODE: ${{ inputs.mode }}
+          BATCH_SIZE: ${{ inputs.batch_size }}
+          PILOT_PROJECT_ID: ${{ inputs.pilot_project_id }}
+          PILOT_CHECKLIST_ID: ${{ inputs.pilot_checklist_id }}
+          CXALLOY_PROJECT_ID: '39282,51203'
+          CXALLOY_IDENTIFIER: ${{ secrets.CXALLOY_IDENTIFIER }}
+          CXALLOY_SECRET: ${{ secrets.CXALLOY_SECRET }}
+          BACKFILL_IDENTIFIER: ${{ secrets.CXALLOY_BACKFILL_IDENTIFIER }}
+          BACKFILL_SECRET: ${{ secrets.CXALLOY_BACKFILL_SECRET }}
+        run: |
+          if [[ "$BACKFILL_MODE" != "preview" && ( -n "$BACKFILL_IDENTIFIER" || -n "$BACKFILL_SECRET" ) ]]; then
+            if [[ -z "$BACKFILL_IDENTIFIER" || -z "$BACKFILL_SECRET" ]]; then
+              echo "::error::Set both CXALLOY_BACKFILL_IDENTIFIER and CXALLOY_BACKFILL_SECRET."
+              exit 1
+            fi
+            export CXALLOY_IDENTIFIER="$BACKFILL_IDENTIFIER" CXALLOY_SECRET="$BACKFILL_SECRET"
+          fi
+          python -u cxalloy_checklist_signature_backfill.py
+
+      - name: Upload preview or backfill results
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: KUL21-signature-backfill
+          path: checklist_signature_backfill.csv
+          if-no-files-found: ignore
